@@ -1,36 +1,48 @@
 # Trazabilidad Backlog ↔ Implementación — Backend GastronomIA
 
-> Mapea las HU de `Product Backlog.md` (fuente de verdad: IDs `HU-XX-YY`, criterios Gherkin)
-> con specs, PRs y tests. Evidencia de trazabilidad (ABET SO7). Actualizado: 2026-06-15.
+> Mapea las HU de `Product Backlog.md` (fuente de verdad) con specs, PRs y tests.
+> Evidencia de trazabilidad (ABET SO7). Actualizado: 2026-06-15.
 
-## Decisiones de reconciliación (2026-06-15)
+## Decisiones de reconciliación
+1. **Roles = 3** (`owner`/`manager`/`staff`), no los 5 del backlog original. HU-01-04 actualizado.
+2. **IDs oficiales** del backlog (`HU-01-XX`, `HU-12-XX`); la numeración previa `HU-E01-0X` quedó obsoleta.
 
-1. **Modelo de roles = 3** (`owner` / `manager` / `staff`), NO los 5 del backlog original
-   (Admin/Manager/Cashier/Waiter/Kitchen). Motivo: el frontend (42 pantallas con gating) +
-   `backend.md` + el código ya usan 3 roles → menor retrabajo. HU-01-04 actualizado en el backlog.
-2. **IDs oficiales**: los specs usan los IDs del backlog (`HU-01-XX`, `HU-12-XX`). La numeración
-   previa `HU-E01-0X` / `HU-E12-01` queda obsoleta (renombrada).
+## E01 — Identity, Multi-Tenancy y Seguridad (10 HU)
+| HU | Título | Estado | Spec | PR |
+|---|---|---|---|---|
+| HU-01-01 | Registro de restaurante (tenant) | 🟡 Parcial | `HU-01-01-y-02-registro-login` | #5 |
+| HU-01-02 | Login con email y password | 🟢 Hecho (lockout incl.) | `HU-01-01-y-02` / `HU-01-03-y-08` | #5, #8 |
+| HU-01-03 | Refresh token con rotación | 🟢 Hecho | `HU-01-03-y-08-session` | #8 |
+| HU-01-04 | Roles y permisos (RBAC) | 🟢 Hecho | `HU-01-04-rbac` | #7 |
+| HU-01-05 | Invitación de usuarios por email | 🔲 Diferido (correo) | — | — |
+| HU-01-06 | Cambio de contraseña | 🟢 Hecho | `HU-01-06-change-password` | #11 |
+| HU-01-07 | Recuperación de contraseña | 🔲 Diferido (correo) | — | — |
+| HU-01-08 | Cierre de sesión | 🟢 Hecho (backend) | `HU-01-03-y-08-session` | #8 |
+| HU-01-09 | Audit log | 🟢 Hecho | `HU-01-09-audit-log` | #10 |
+| HU-01-10 | Configuración del local | 🟢 Hecho | `HU-01-10-tenant-config` | #9 |
 
-## Estado por HU construida
+**E01: 8/10 funcionales** (7 completas + HU-01-01 parcial). 2 diferidas por requerir servicio de correo.
 
-| HU oficial | Título | Estado | Spec | PR | Tests |
-|---|---|---|---|---|---|
-| **HU-12-02** | Health checks | 🟡 Parcial | `e12/HU-12-02-health-y-contrato` | #3 | `health.e2e` |
-| **HU-12-06** | Aislamiento multi-tenant (RLS) | 🟡 Casi completo | `e12/HU-12-06-rls-aislamiento` | #4 | `rls.e2e` (4 vectores) |
-| **HU-01-01** | Registro de restaurante (tenant) | 🟡 Parcial | `e01/HU-01-01-y-02-registro-login` | #5 | `auth.e2e` |
-| **HU-01-02** | Login con email y password | 🟡 Parcial | `e01/HU-01-01-y-02-registro-login` | #5 | `auth.e2e` |
+### Gaps / diferidos (todos requieren correo o son refinamientos)
+- **HU-01-01**: email de bienvenida (correo). El RUC se setea vía config (HU-01-10).
+- **HU-01-05 / HU-01-07**: invitación y recuperación de contraseña → **requieren servicio de correo** (Resend); diferidas.
+- **HU-01-06**: notificación por email del cambio (correo).
+- **HU-01-08**: el BFF del frontend debe llamar a `POST /api/auth/logout` (hoy solo limpia la cookie) — follow-up frontend.
+- **HU-01-09**: `before/after` detallado por entidad; retención 5 años (política de storage).
 
-### Gaps conocidos (para cerrar las HU)
-- **HU-12-02**: readiness (`db_ok`/`redis_ok`/`anthropic_api_ok`/`version`) + `503` ante fallo; exponer en `/health` (hoy `/api/health`).
-- **HU-12-06**: iterar por rol; cubrir TODAS las tablas a medida que crezcan; gate de CI (bloquear deploy si falla → depende de HU-12-01).
-- **HU-01-01**: RUC (11 díg.) en el modelo/validación + email de bienvenida (Resend).
-- **HU-01-02**: bloqueo tras 5 intentos fallidos (15 min).
+## E12 — Plataforma (lo tocado)
+| HU | Título | Estado | Spec | PR |
+|---|---|---|---|---|
+| HU-12-02 | Health checks | 🟡 Parcial (falta readiness db/redis + 503) | `HU-12-02-health-y-contrato` | #3 |
+| HU-12-06 | Aislamiento multi-tenant (RLS) | 🟢 Hecho (4 vectores) | `HU-12-06-rls-aislamiento` | #4 |
 
-## E01 — HU pendientes (completas)
-`HU-01-03` refresh rotation · `HU-01-04` RBAC (gating CASL + 403) · `HU-01-05` invitaciones ·
-`HU-01-06` cambio password (min 12 + complejidad) · `HU-01-07` recuperación · `HU-01-08` logout ·
-`HU-01-09` audit log · `HU-01-10` config local.
+## Integración frontend ↔ backend
+- Auth (login/register) integrada y validada E2E (frontend PR #1).
+- Proxy autenticado del BFF (`backendFetch`) + `/api/users` (frontend PR #2). Rutas de dominio (recipes/inventory/…) siguen mock hasta E02–E05.
 
-## Infra foundational (transversal — no es una HU del backlog)
-`src/shared/` (contrato Zod: `ApiResponse`, auth, `jwtClaims`), `PrismaService.runInTenant`,
-`ZodValidationPipe`, `JwtAuthGuard`, `gastronomia_auth` (rol BYPASSRLS para login).
+## Infra foundational (transversal — no es una HU)
+`src/shared/` (contrato Zod), `PrismaService.runInTenant`, `ZodValidationPipe`, `JwtAuthGuard`,
+`PoliciesGuard`/CASL, `AuthDbClient`/`gastronomia_auth`, `AuditInterceptor`.
+
+## Próximas épicas
+E02 (catálogo/recetas) → E03 (POS) → E04 (cobros) → E05 (inventario) → E06 (costeo) → E07 (reportes) → E08 (forecasting) → E09 (chat) → E10 (notificaciones) → E11 (ingesta). Cada backend habilita proxear sus rutas del BFF.

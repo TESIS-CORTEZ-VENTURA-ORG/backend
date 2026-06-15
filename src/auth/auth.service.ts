@@ -11,6 +11,7 @@ import {
   appRoleSchema,
   type AppRole,
   type AuthTokens,
+  type ChangePasswordInput,
   type LoginInput,
   type RegisterInput,
 } from '../shared';
@@ -110,6 +111,29 @@ export class AuthService {
 
   async logout(rawToken: string): Promise<void> {
     await this.refreshTokens.revoke(rawToken);
+  }
+
+  /** Cambia la contraseña del usuario autenticado y revoca TODAS sus sesiones. */
+  async changePassword(
+    userId: string,
+    tenantId: string,
+    input: ChangePasswordInput,
+  ): Promise<void> {
+    const user = await this.prisma.runInTenant(tenantId, (tx) =>
+      tx.user.findUniqueOrThrow({ where: { id: userId } }),
+    );
+    const valid = await this.passwords.verify(
+      input.currentPassword,
+      user.passwordHash,
+    );
+    if (!valid) {
+      throw new UnauthorizedException('La contraseña actual es incorrecta');
+    }
+    const passwordHash = await this.passwords.hash(input.newPassword);
+    await this.prisma.runInTenant(tenantId, (tx) =>
+      tx.user.update({ where: { id: userId }, data: { passwordHash } }),
+    );
+    await this.refreshTokens.revokeAllForUser(userId);
   }
 
   private async issueTokens(
