@@ -51,6 +51,7 @@ model Tenant {
   sales              Sale[]
   payments           Payment[]
   cashCloses         CashClose[]
+  overheadCosts      OverheadCost[]
 
   @@map("tenants")
 }
@@ -640,4 +641,25 @@ model RefreshToken {
   @@index([userId])
   @@index([family])
   @@map("refresh_tokens")
+}
+
+// HU-06-02 · Costo indirecto de fabricación (CIF) mensual: gastos fijos/indirectos
+// del local (alquiler, sueldos, servicios, marketing…) registrados por período
+// `YYYY-MM`. Se prorratean entre los platos vendidos del período (HU-06-03) para
+// obtener el costo total por plato (ingredientes + CIF). amount = PEN.
+model OverheadCost {
+  id        String    @id @default(uuid()) @db.Uuid
+  tenantId  String    @map("tenant_id") @db.Uuid
+  period    String // YYYY-MM
+  concept   String
+  amount    Decimal   @db.Decimal(12, 2)
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+  @@index([period])
+  @@map("overhead_costs")
 }

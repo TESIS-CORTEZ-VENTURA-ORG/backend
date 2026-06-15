@@ -3,6 +3,7 @@ import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
 import { BillingModule } from './billing/billing.module';
 import { CatalogModule } from './catalog/catalog.module';
+import { CostingModule } from './costing/costing.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { PlatformModule } from './platform/platform.module';
 import { PosModule } from './pos/pos.module';
@@ -21,6 +22,7 @@ import { UsersModule } from './users/users.module';
     PosModule,
     InventoryModule,
     BillingModule,
+    CostingModule,
   ],
 })
 export class AppModule {}

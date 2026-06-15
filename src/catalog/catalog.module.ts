@@ -52,5 +52,7 @@ import { UnitsService } from './units.service';
     MenuModifiersService,
     MenuAvailabilityService,
   ],
+  // E06 (costing) reutiliza RecipesService para el costo de ingredientes (BOM).
+  exports: [RecipesService],
 })
 export class CatalogModule {}

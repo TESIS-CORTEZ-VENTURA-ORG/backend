@@ -51,6 +51,20 @@ describe('CaslAbilityFactory (HU-01-04 matriz de permisos)', () => {
     expect(manager.can('manage', 'Sale')).toBe(true); // incl. anular ticket
   });
 
+  it('costeo (E06): reutiliza Report — owner/manager leen y gestionan CIF; staff NO accede', () => {
+    const owner = factory.createForRoles(['owner']);
+    expect(owner.can('read', 'Report')).toBe(true); // ver costeo/márgenes
+    expect(owner.can('manage', 'Report')).toBe(true); // escribir CIF
+
+    const manager = factory.createForRoles(['manager']);
+    expect(manager.can('read', 'Report')).toBe(true); // ver costeo
+    expect(manager.can('manage', 'Report')).toBe(true); // registrar/editar CIF
+
+    const staff = factory.createForRoles(['staff']);
+    expect(staff.can('read', 'Report')).toBe(false); // costeo = info de gestión → 403
+    expect(staff.can('manage', 'Report')).toBe(false);
+  });
+
   it('catálogo: owner/manager gestionan; staff solo lee', () => {
     expect(factory.createForRoles(['owner']).can('manage', 'Catalog')).toBe(
       true,
