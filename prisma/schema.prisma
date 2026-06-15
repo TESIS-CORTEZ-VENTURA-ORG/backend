@@ -53,6 +53,8 @@ model Tenant {
   cashCloses         CashClose[]
   overheadCosts      OverheadCost[]
   costingCloses      CostingClose[]
+  notifications           Notification[]
+  notificationPreferences NotificationPreference[]
 
   @@map("tenants")
 }
@@ -690,4 +692,49 @@ model CostingClose {
   @@unique([tenantId, period])
   @@index([tenantId])
   @@map("costing_closes")
+}
+
+// HU-10-01 · Notificación in-app. `userId = null` → broadcast (todos los del
+// tenant); si no, dirigida a ese usuario. `type`: low_stock|order_ready|
+// bill_requested|system. `data` = payload del deep-link / action button
+// (HU-10-01/04). `readAt = null` → no leída (badge de la campana). Crear es
+// interno (service-to-service); cada usuario lee/marca las suyas + broadcast.
+// RLS FORCE por tenant.
+model Notification {
+  id        String    @id @default(uuid()) @db.Uuid
+  tenantId  String    @map("tenant_id") @db.Uuid
+  userId    String?   @map("user_id") @db.Uuid
+  type      String
+  title     String
+  body      String
+  data      Json?
+  readAt    DateTime? @map("read_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+  @@index([tenantId, userId])
+  @@map("notifications")
+}
+
+// HU-10-03 · Preferencia de notificación por (usuario, tipo) y canal. `inApp`
+// gobierna el canal in-app (default on); `email` reserva el canal correo para
+// HU-10-02 (Resend, diferido). Ausencia de fila = default (inApp=true,
+// email=false). RLS FORCE por tenant. @@unique([tenantId,userId,type]).
+model NotificationPreference {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  type      String
+  inApp     Boolean  @default(true) @map("in_app")
+  email     Boolean  @default(false)
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, userId, type])
+  @@index([tenantId])
+  @@index([tenantId, userId])
+  @@map("notification_preferences")
 }

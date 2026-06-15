@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { type Ingredient, Prisma } from '@prisma/client';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../platform/prisma/prisma.service';
 import {
   type CreateMovementInput,
@@ -101,7 +102,10 @@ function movementToView(m: MovementRow): MovementView {
 
 @Injectable()
 export class InventoryService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   /** HU-05-01 · Stock actual (kardex) de cada insumo con su estado de alerta. */
   async listStock(tenantId: string): Promise<StockView[]> {
@@ -179,7 +183,47 @@ export class InventoryService {
         data: { stock: newStock },
       });
 
+      // E10/HU-10-01 (trigger HU-05-10) · Notificación `low_stock` cuando el
+      // movimiento CRUZA el umbral: stock previo ≥ minStock y nuevo < minStock.
+      // Crossing-only (idempotente): si ya estaba por debajo no se re-notifica
+      // (no hace spam en cada salida posterior). Broadcast (userId=null), en la
+      // MISMA tx que el movimiento.
+      await this.notifyIfCrossedLowStock(tx, tenantId, ingredient, newStock);
+
       return movementToView(movement);
+    });
+  }
+
+  /**
+   * E10/HU-10-01 · Emite una notificación `low_stock` (broadcast) cuando el
+   * stock CRUZA de ≥ minStock (antes del movimiento) a < minStock (después). No
+   * notifica si no hay umbral (minStock ≤ 0) ni si el stock ya estaba por debajo
+   * (crossing-only → sin spam). `pre` es el insumo ANTES de aplicar el delta.
+   */
+  private async notifyIfCrossedLowStock(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    pre: Ingredient,
+    newStock: Prisma.Decimal,
+  ): Promise<void> {
+    const min = pre.minStock;
+    if (min.lte(0)) return; // sin umbral configurado → nunca alerta
+    const crossed = pre.stock.gte(min) && newStock.lt(min);
+    if (!crossed) return;
+
+    const status = statusFor(newStock, min);
+    await this.notifications.createTx(tx, tenantId, {
+      userId: null, // broadcast: todos los del tenant
+      type: 'low_stock',
+      title: `Stock bajo: ${pre.name}`,
+      body: `${pre.name} está en ${newStock.toFixed(3)} ${pre.unit} (mínimo ${min.toFixed(3)}).`,
+      data: {
+        ingredientId: pre.id,
+        stock: newStock.toFixed(3),
+        minStock: min.toFixed(3),
+        status,
+        href: '/inventory/alerts',
+      },
     });
   }
 
