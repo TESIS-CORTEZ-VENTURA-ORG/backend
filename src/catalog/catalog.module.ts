@@ -6,6 +6,10 @@ import { CategoriesController } from './categories.controller';
 import { CategoriesService } from './categories.service';
 import { IngredientsController } from './ingredients.controller';
 import { IngredientsService } from './ingredients.service';
+import { MenuCategoriesController } from './menu-categories.controller';
+import { MenuCategoriesService } from './menu-categories.service';
+import { MenuItemsController } from './menu-items.controller';
+import { MenuItemsService } from './menu-items.service';
 import { ProductSuppliersController } from './product-suppliers.controller';
 import { ProductSuppliersService } from './product-suppliers.service';
 import { RecipesController } from './recipes.controller';
@@ -15,7 +19,7 @@ import { SuppliersService } from './suppliers.service';
 import { UnitsController } from './units.controller';
 import { UnitsService } from './units.service';
 
-/** E02 — Catálogo: insumos, unidades, categorías, proveedores y producto-proveedor. */
+/** E02 — Catálogo: insumos, unidades, categorías, proveedores, recetas (BOM) y menú. */
 @Module({
   imports: [PlatformModule, AuthModule, AuthzModule],
   controllers: [
@@ -25,6 +29,8 @@ import { UnitsService } from './units.service';
     SuppliersController,
     ProductSuppliersController,
     RecipesController,
+    MenuCategoriesController,
+    MenuItemsController,
   ],
   providers: [
     IngredientsService,
@@ -33,6 +39,8 @@ import { UnitsService } from './units.service';
     SuppliersService,
     ProductSuppliersService,
     RecipesService,
+    MenuCategoriesService,
+    MenuItemsService,
   ],
 })
 export class CatalogModule {}

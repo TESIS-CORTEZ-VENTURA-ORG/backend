@@ -62,6 +62,24 @@ export class RecipesService {
     });
   }
 
+  /**
+   * Costo unitario (por rendimiento) de una receta, reusando el motor recursivo.
+   * Pensado para que otros servicios del catálogo (p. ej. menú) calculen márgenes
+   * dentro de su propia transacción `runInTenant`.
+   */
+  async costPerYieldTx(tx: Tx, recipeId: string): Promise<Prisma.Decimal> {
+    const recipe = await tx.recipe.findFirst({
+      where: { id: recipeId, deletedAt: null },
+    });
+    if (!recipe) {
+      throw new NotFoundException('Receta no encontrada');
+    }
+    const total = await this.recipeCost(tx, recipeId, new Set<string>(), 0);
+    return recipe.yield.isZero()
+      ? new Prisma.Decimal(0)
+      : total.div(recipe.yield);
+  }
+
   async create(tenantId: string, dto: CreateRecipeInput): Promise<RecipeView> {
     return this.prisma.runInTenant(tenantId, async (tx) => {
       await this.validateRefs(tx, dto.items);
@@ -116,6 +134,12 @@ export class RecipesService {
         throw new ConflictException(
           'La receta se usa como sub-receta en otra receta',
         );
+      }
+      const usedInMenu = await tx.menuItem.count({
+        where: { recipeId: id, deletedAt: null },
+      });
+      if (usedInMenu > 0) {
+        throw new ConflictException('La receta se usa en un plato del menú');
       }
       await tx.recipe.update({
         where: { id },
