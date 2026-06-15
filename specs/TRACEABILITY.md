@@ -30,6 +30,26 @@
 - **HU-01-08**: el BFF del frontend debe llamar a `POST /api/auth/logout` (hoy solo limpia la cookie) — follow-up frontend.
 - **HU-01-09**: `before/after` detallado por entidad; retención 5 años (política de storage).
 
+## E02 — Catálogo, Recetas y Menú (14 HU)
+| HU | Título | Estado | Spec | PR |
+|---|---|---|---|---|
+| HU-02-01 | CRUD de insumos | 🟢 Hecho | `HU-02-01-ingredients` | #13 |
+| HU-02-02 | Carga masiva de insumos vía Excel | 🟡 Pendiente (parser) | — | — |
+| HU-02-03 | Unidades de medida con conversión | 🟢 Hecho | `HU-02-03-04-units-categories` | #14 |
+| HU-02-04 | Categorías jerárquicas | 🟢 Hecho | `HU-02-03-04-units-categories` | #14 |
+| HU-02-05 | CRUD de proveedores | 🟢 Hecho | `HU-02-05-06-suppliers` | #15 |
+| HU-02-06 | Asociar productos con proveedores | 🟢 Hecho | `HU-02-05-06-suppliers` | #15 |
+| HU-02-07 | Crear receta estandarizada (BOM) | 🟢 Hecho | `HU-02-07-09-recipes` | #16 |
+| HU-02-08 | Sub-recetas anidadas | 🟢 Hecho | `HU-02-07-09-recipes` | #16 |
+| HU-02-09 | Versionado de recetas | 🟢 Hecho | `HU-02-07-09-recipes` | #16 |
+| HU-02-10 | Crear plato del menú | 🔲 Pendiente | — | — |
+| HU-02-11 | Gestión de modificadores | 🔲 Pendiente | — | — |
+| HU-02-12 | Categorías del menú | 🔲 Pendiente | — | — |
+| HU-02-13 | Disponibilidad por horario | 🔲 Pendiente | — | — |
+| HU-02-14 | Foto del plato | 🔲 Diferido (storage R2) | — | — |
+
+**E02: 9/14 al cierre de esta tanda** (Inc A–C). Pendientes: menú (10–13, Inc D), Excel (02, Inc E). Diferido: foto (14, requiere object storage).
+
 ## E12 — Plataforma (lo tocado)
 | HU | Título | Estado | Spec | PR |
 |---|---|---|---|---|
