@@ -1,7 +1,7 @@
 # Trazabilidad Backlog ↔ Implementación — Backend GastronomIA
 
 > Mapea las HU de `Product Backlog.md` (fuente de verdad) con specs, PRs y tests.
-> Evidencia de trazabilidad (ABET SO7). Actualizado: 2026-06-15.
+> Evidencia de trazabilidad (ABET SO7). Actualizado: 2026-06-15 (E05 Inc 1).
 
 ## Decisiones de reconciliación
 1. **Roles = 3** (`owner`/`manager`/`staff`), no los 5 del backlog original. HU-01-04 actualizado.
@@ -67,6 +67,23 @@
 | HU-03-12 | Solicitar cuenta | 🟢 Hecho (vía `PATCH /api/tables {status:'bill'}`) | `HU-03-03-04-05-10-11-12-orders` | #22 |
 
 **E03: 12/12 backend** (Inc A — salón: 2 · Inc B — órdenes: 6 · Inc C — cocina/KDS: 4). Real-time por **polling** (push SSE = mejora; no requiere servicio externo). HU-03-12 "solicitar cuenta" no añade endpoint: reutiliza `PATCH /api/tables/:id { status:'bill' }`. Inc C añade `kitchen_stations` (RLS FORCE), `menu_categories.kitchen_station_id`, `POST /api/orders/:id/send-to-kitchen`, `/api/kitchen/stations` + `/api/kitchen/queue` + `PATCH /api/kitchen/items/:itemId`, y el read-model de mesas (`GET /api/tables/:id` + campos `currentOrderId/openedAt/guests/waiterId` en el listado). Nota: el frontend aún NO tiene **pantalla KDS** (se construirá; el backend ya la habilita).
+
+## E05 — Inventario, Compras y Mermas (11 HU)
+| HU | Título | Estado | Spec | PR |
+|---|---|---|---|---|
+| HU-05-01 | Ver stock actual (kardex) | 🟢 Hecho | `HU-05-01-stock-movimientos-mermas` | #24 |
+| HU-05-02 | Registrar entrada manual de stock | 🟢 Hecho | `HU-05-01-stock-movimientos-mermas` | #24 |
+| HU-05-03 | Registrar salida manual | 🟢 Hecho | `HU-05-01-stock-movimientos-mermas` | #24 |
+| HU-05-04 | Crear orden de compra | 🔲 Pendiente (Inc 2) | — | — |
+| HU-05-05 | Enviar OC al proveedor | 🔲 Diferido (correo) | — | — |
+| HU-05-06 | Recepcionar OC (parcial/total) | 🔲 Pendiente (Inc 2) | — | — |
+| HU-05-07 | Cancelar OC | 🔲 Pendiente (Inc 2) | — | — |
+| HU-05-08 | Registrar merma con razón | 🟢 Hecho | `HU-05-01-stock-movimientos-mermas` | #24 |
+| HU-05-09 | Ver histórico de mermas | 🟢 Hecho | `HU-05-01-stock-movimientos-mermas` | #24 |
+| HU-05-10 | Alertas de stock bajo | 🟢 Hecho | `HU-05-01-stock-movimientos-mermas` | #24 |
+| HU-05-11 | Detectar anomalías de mermas con IA | 🔲 Diferido (IA/E08) | — | — |
+
+**E05: 6/11 backend (Incremento 1)** — stock/kardex, movimientos (entrada/salida), mermas con razón, histórico de mermas y alertas de stock bajo. **Inc 2** (siguiente): órdenes de compra HU-05-04/06/07 (HU-05-05 envío al proveedor = **correo**, diferido). **HU-05-11** anomalías de merma = **servicio de IA (E08)**, diferido. Modelo nuevo `inventory_movements` (RLS FORCE, kardex event-sourced con delta firmado); `ingredients` gana `stock`/`minStock` `Decimal(12,3)` (diferidos en E02, ahora gobernados por E05). Endpoints: `GET /api/inventory/stock`, `GET /api/inventory/movements`, `POST /api/inventory/movements`, `PATCH /api/inventory/levels/:ingredientId`, `GET /api/inventory/alerts`, `GET /api/inventory/waste`. Contrato alineado con el mock BFF del frontend (`MovementType`, `qty` firmado sumado al stock).
 
 ## E12 — Plataforma (lo tocado)
 | HU | Título | Estado | Spec | PR |
