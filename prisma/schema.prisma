@@ -32,24 +32,25 @@ model Tenant {
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
 
-  users          User[]
-  ingredients    Ingredient[]
-  unitsOfMeasure UnitOfMeasure[]
-  categories     Category[]
-  suppliers      Supplier[]
-  recipes        Recipe[]
-  menuCategories MenuCategory[]
-  menuItems      MenuItem[]
-  menuModifiers  MenuModifier[]
-  menuAvailability MenuAvailability[]
-  zones          Zone[]
-  diningTables   DiningTable[]
-  orders         Order[]
-  kitchenStations KitchenStation[]
+  users              User[]
+  ingredients        Ingredient[]
+  unitsOfMeasure     UnitOfMeasure[]
+  categories         Category[]
+  suppliers          Supplier[]
+  recipes            Recipe[]
+  menuCategories     MenuCategory[]
+  menuItems          MenuItem[]
+  menuModifiers      MenuModifier[]
+  menuAvailability   MenuAvailability[]
+  zones              Zone[]
+  diningTables       DiningTable[]
+  orders             Order[]
+  kitchenStations    KitchenStation[]
   inventoryMovements InventoryMovement[]
-  purchaseOrders PurchaseOrder[]
-  sales          Sale[]
-  payments       Payment[]
+  purchaseOrders     PurchaseOrder[]
+  sales              Sale[]
+  payments           Payment[]
+  cashCloses         CashClose[]
 
   @@map("tenants")
 }
@@ -151,22 +152,22 @@ model Order {
 // status: issued | void. El envío electrónico a SUNAT es externo/fuera de alcance
 // (schema preparado). docType: boleta | factura.
 model Sale {
-  id          String    @id @default(uuid()) @db.Uuid
-  tenantId    String    @map("tenant_id") @db.Uuid
-  orderId     String    @map("order_id") @db.Uuid
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  orderId     String   @map("order_id") @db.Uuid
   serie       String
   number      Int
-  docType     String    @map("doc_type")
+  docType     String   @map("doc_type")
   customer    String?
-  customerDoc String?   @map("customer_doc")
-  subtotal    Decimal   @db.Decimal(12, 2)
-  igv         Decimal   @db.Decimal(12, 2)
-  total       Decimal   @db.Decimal(12, 2)
-  status      String    @default("issued")
-  voidReason  String?   @map("void_reason")
-  issuedAt    DateTime  @default(now()) @map("issued_at")
-  createdAt   DateTime  @default(now()) @map("created_at")
-  updatedAt   DateTime  @updatedAt @map("updated_at")
+  customerDoc String?  @map("customer_doc")
+  subtotal    Decimal  @db.Decimal(12, 2)
+  igv         Decimal  @db.Decimal(12, 2)
+  total       Decimal  @db.Decimal(12, 2)
+  status      String   @default("issued")
+  voidReason  String?  @map("void_reason")
+  issuedAt    DateTime @default(now()) @map("issued_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
 
   tenant   Tenant    @relation(fields: [tenantId], references: [id])
   order    Order     @relation(fields: [orderId], references: [id])
@@ -196,6 +197,27 @@ model Payment {
   @@map("payments")
 }
 
+// HU-04-08 · Cierre Z del día. Agrega las ventas emitidas de la ventana abierta
+// (desde el último cierre) y queda INMUTABLE (append-only): totales por método de
+// pago + conteos. `byMethod` = JSON { cash, card, yape, plin } con montos string.
+model CashClose {
+  id         String   @id @default(uuid()) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  openedAt   DateTime @map("opened_at")
+  closedAt   DateTime @default(now()) @map("closed_at")
+  salesCount Int      @map("sales_count")
+  voidCount  Int      @map("void_count")
+  totalGross Decimal  @map("total_gross") @db.Decimal(12, 2)
+  byMethod   Json     @map("by_method")
+  userId     String?  @map("user_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+  @@map("cash_closes")
+}
+
 // HU-03-04/05/10: ítem de una orden. name/unitPrice/modifiers son SNAPSHOTS del
 // momento (el precio incluye los modificadores). status: pending | preparing |
 // ready | served. kitchenStationId reservado para Inc C (KDS) — sin FK aún.
@@ -206,7 +228,7 @@ model OrderItem {
   menuItemId       String    @map("menu_item_id") @db.Uuid
   name             String
   qty              Int
-  unitPrice        Decimal   @db.Decimal(12, 2) @map("unit_price")
+  unitPrice        Decimal   @map("unit_price") @db.Decimal(12, 2)
   notes            String?
   modifiers        Json      @default("[]")
   status           String    @default("pending")
@@ -228,8 +250,8 @@ model OrderItem {
 
 // HU-02-07/08/09: receta estandarizada (BOM). kind dish|sub_recipe; yield (rendimiento).
 model Recipe {
-  id        String    @id @default(uuid()) @db.Uuid
-  tenantId  String    @map("tenant_id") @db.Uuid
+  id          String    @id @default(uuid()) @db.Uuid
+  tenantId    String    @map("tenant_id") @db.Uuid
   name        String
   kind        String    @default("dish")
   yield       Decimal   @default(1) @db.Decimal(12, 3)
@@ -238,9 +260,9 @@ model Recipe {
   emoji       String?
   description String?
   prepMinutes Int?      @map("prep_minutes")
-  createdAt DateTime  @default(now()) @map("created_at")
-  updatedAt DateTime  @updatedAt @map("updated_at")
-  deletedAt DateTime? @map("deleted_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  deletedAt   DateTime? @map("deleted_at")
 
   tenant    Tenant          @relation(fields: [tenantId], references: [id])
   items     RecipeItem[]    @relation("RecipeItems")
@@ -255,16 +277,16 @@ model Recipe {
 // HU-02-12: categoría de la carta (entradas, principales, postres, bebidas).
 // Distinta de Category (catálogo de insumos). position = orden en POS; isActive = visible.
 model MenuCategory {
-  id        String    @id @default(uuid()) @db.Uuid
-  tenantId  String    @map("tenant_id") @db.Uuid
-  name      String
-  position  Int       @default(0)
-  isActive  Boolean   @default(true) @map("is_active")
+  id               String    @id @default(uuid()) @db.Uuid
+  tenantId         String    @map("tenant_id") @db.Uuid
+  name             String
+  position         Int       @default(0)
+  isActive         Boolean   @default(true) @map("is_active")
   // HU-03-07: estación de cocina destino para los platos de esta categoría (opcional).
-  kitchenStationId String? @map("kitchen_station_id") @db.Uuid
-  createdAt DateTime  @default(now()) @map("created_at")
-  updatedAt DateTime  @updatedAt @map("updated_at")
-  deletedAt DateTime? @map("deleted_at")
+  kitchenStationId String?   @map("kitchen_station_id") @db.Uuid
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+  deletedAt        DateTime? @map("deleted_at")
 
   tenant         Tenant          @relation(fields: [tenantId], references: [id])
   kitchenStation KitchenStation? @relation(fields: [kitchenStationId], references: [id])
@@ -308,7 +330,7 @@ model MenuModifier {
   tenantId   String    @map("tenant_id") @db.Uuid
   menuItemId String    @map("menu_item_id") @db.Uuid
   name       String
-  priceDelta Decimal   @default(0) @db.Decimal(12, 2) @map("price_delta")
+  priceDelta Decimal   @default(0) @map("price_delta") @db.Decimal(12, 2)
   required   Boolean   @default(false)
   position   Int       @default(0)
   createdAt  DateTime  @default(now()) @map("created_at")
@@ -350,7 +372,7 @@ model RecipeItem {
   ingredientId String? @map("ingredient_id") @db.Uuid
   subRecipeId  String? @map("sub_recipe_id") @db.Uuid
   qty          Decimal @db.Decimal(12, 3)
-  wasteFactor  Decimal @default(0) @db.Decimal(5, 4) @map("waste_factor")
+  wasteFactor  Decimal @default(0) @map("waste_factor") @db.Decimal(5, 4)
 
   recipe     Recipe      @relation("RecipeItems", fields: [recipeId], references: [id], onDelete: Cascade)
   ingredient Ingredient? @relation(fields: [ingredientId], references: [id])
@@ -408,7 +430,7 @@ model ProductSupplier {
   ingredientId String   @map("ingredient_id") @db.Uuid
   supplierId   String   @map("supplier_id") @db.Uuid
   supplierSku  String?  @map("supplier_sku")
-  lastPrice    Decimal? @db.Decimal(12, 2) @map("last_price")
+  lastPrice    Decimal? @map("last_price") @db.Decimal(12, 2)
   preferred    Boolean  @default(false)
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
@@ -428,7 +450,7 @@ model UnitOfMeasure {
   code         String
   name         String
   family       String // mass | volume | count
-  factorToBase Decimal   @default(1) @db.Decimal(18, 6) @map("factor_to_base")
+  factorToBase Decimal   @default(1) @map("factor_to_base") @db.Decimal(18, 6)
   createdAt    DateTime  @default(now()) @map("created_at")
   updatedAt    DateTime  @updatedAt @map("updated_at")
   deletedAt    DateTime? @map("deleted_at")
@@ -469,11 +491,11 @@ model Ingredient {
   type      String
   unit      String
   category  String?
-  unitCost  Decimal   @default(0) @db.Decimal(12, 2) @map("unit_cost")
+  unitCost  Decimal   @default(0) @map("unit_cost") @db.Decimal(12, 2)
   // Inventario (E05). Diferidos en E02; E05 los gobierna. stock = on-hand actual,
   // minStock = umbral de reorden (alertas de stock bajo, HU-05-10).
   stock     Decimal   @default(0) @db.Decimal(12, 3)
-  minStock  Decimal   @default(0) @db.Decimal(12, 3) @map("min_stock")
+  minStock  Decimal   @default(0) @map("min_stock") @db.Decimal(12, 3)
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
@@ -545,9 +567,9 @@ model PurchaseOrderItem {
   tenantId        String   @map("tenant_id") @db.Uuid
   purchaseOrderId String   @map("purchase_order_id") @db.Uuid
   ingredientId    String   @map("ingredient_id") @db.Uuid
-  qtyOrdered      Decimal  @db.Decimal(12, 3) @map("qty_ordered")
-  qtyReceived     Decimal  @default(0) @db.Decimal(12, 3) @map("qty_received")
-  unitCost        Decimal  @db.Decimal(12, 2) @map("unit_cost")
+  qtyOrdered      Decimal  @map("qty_ordered") @db.Decimal(12, 3)
+  qtyReceived     Decimal  @default(0) @map("qty_received") @db.Decimal(12, 3)
+  unitCost        Decimal  @map("unit_cost") @db.Decimal(12, 2)
   createdAt       DateTime @default(now()) @map("created_at")
 
   purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
