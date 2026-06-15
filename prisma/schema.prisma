@@ -9,3 +9,36 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+// E01 — Identity & Multi-Tenancy. Convenciones (backend.md §6): snake_case en BD,
+// tenant_id UUID NOT NULL en toda tabla de negocio, soft delete (deleted_at).
+// La RLS FORCE + policies se añaden en el SQL de la migración (no se expresan en
+// el schema Prisma). Ver prisma/migrations/**/migration.sql.
+
+model Tenant {
+  id        String    @id @default(uuid()) @db.Uuid
+  name      String
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  users User[]
+
+  @@map("tenants")
+}
+
+model User {
+  id        String    @id @default(uuid()) @db.Uuid
+  tenantId  String    @map("tenant_id") @db.Uuid
+  email     String
+  name      String
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@map("users")
+}

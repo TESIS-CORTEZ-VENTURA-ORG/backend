@@ -21,6 +21,9 @@ services:
       - '5432:5432'
     volumes:
       - gastronomia_pgdata:/var/lib/postgresql/data
+      # Roles RLS (gastronomia_app). Corre solo en volúmenes nuevos; sobre un
+      # contenedor existente, aplicar manualmente (ver db/init/01-roles.sql).
+      - ./db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U postgres -d gastronomia_dev']
       interval: 5s
