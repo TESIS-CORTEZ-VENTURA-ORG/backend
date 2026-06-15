@@ -185,4 +185,45 @@ describe('Catálogo — recetas/BOM HU-02-07/08/09 (e2e)', () => {
       items: [{ ingredientId: carneId, qty: 1 }],
     }).expect(403);
   });
+
+  it('campos de presentación (emoji/descr/prepMin) hacen round-trip + costPerYield en lista', async () => {
+    const presData = z.object({
+      id: z.uuid(),
+      emoji: z.string().nullable(),
+      description: z.string().nullable(),
+      prepMinutes: z.number().nullable(),
+      costPerYield: z.string(),
+    });
+    const presSchema = apiResponseSchema(presData);
+    const created = presSchema.parse(
+      (
+        await post('/api/recipes', ownerToken, {
+          name: 'Causa',
+          kind: 'dish',
+          yield: 2,
+          emoji: '🥔',
+          description: 'Causa limeña',
+          prepMinutes: 25,
+          items: [{ ingredientId: carneId, qty: 2 }],
+        }).expect(201)
+      ).body,
+    ).data;
+    expect(created.emoji).toBe('🥔');
+    expect(created.description).toBe('Causa limeña');
+    expect(created.prepMinutes).toBe(25);
+    expect(created.costPerYield).toBe('30.00'); // 2×30 / yield 2
+
+    const listSchema = apiResponseSchema(z.array(presData));
+    const list = listSchema.parse(
+      (
+        await request(app.getHttpServer())
+          .get('/api/recipes')
+          .set(bearer(ownerToken))
+          .expect(200)
+      ).body,
+    ).data;
+    const causa = list.find((r) => r.id === created.id);
+    expect(causa?.emoji).toBe('🥔');
+    expect(causa?.costPerYield).toBe('30.00');
+  });
 });

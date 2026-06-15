@@ -20,6 +20,10 @@ export interface RecipeSummary {
   kind: string;
   yield: string;
   version: number;
+  emoji: string | null;
+  description: string | null;
+  prepMinutes: number | null;
+  costPerYield: string;
 }
 export interface RecipeItemView {
   id: string;
@@ -31,7 +35,6 @@ export interface RecipeItemView {
 }
 export interface RecipeView extends RecipeSummary {
   totalCost: string;
-  costPerYield: string;
   items: RecipeItemView[];
 }
 
@@ -40,19 +43,32 @@ export class RecipesService {
   constructor(private readonly prisma: PrismaService) {}
 
   async list(tenantId: string): Promise<RecipeSummary[]> {
-    const rows = await this.prisma.runInTenant(tenantId, (tx) =>
-      tx.recipe.findMany({
+    return this.prisma.runInTenant(tenantId, async (tx) => {
+      const rows = await tx.recipe.findMany({
         where: { deletedAt: null },
         orderBy: { name: 'asc' },
-      }),
-    );
-    return rows.map((r) => ({
-      id: r.id,
-      name: r.name,
-      kind: r.kind,
-      yield: r.yield.toString(),
-      version: r.version,
-    }));
+      });
+      const summaries: RecipeSummary[] = [];
+      for (const r of rows) {
+        // costo unitario en vivo (recursivo) — reusa el motor de BOM.
+        const cost = await this.recipeCost(tx, r.id, new Set<string>(), 0);
+        const perYield = r.yield.isZero()
+          ? new Prisma.Decimal(0)
+          : cost.div(r.yield);
+        summaries.push({
+          id: r.id,
+          name: r.name,
+          kind: r.kind,
+          yield: r.yield.toString(),
+          version: r.version,
+          emoji: r.emoji,
+          description: r.description,
+          prepMinutes: r.prepMinutes,
+          costPerYield: perYield.toFixed(2),
+        });
+      }
+      return summaries;
+    });
   }
 
   async get(tenantId: string, id: string): Promise<RecipeView> {
@@ -89,6 +105,9 @@ export class RecipesService {
           name: dto.name,
           kind: dto.kind ?? 'dish',
           yield: dto.yield ?? 1,
+          emoji: dto.emoji ?? null,
+          description: dto.description ?? null,
+          prepMinutes: dto.prepMinutes ?? null,
         },
       });
       await this.createItems(tx, tenantId, recipe.id, dto.items);
@@ -109,6 +128,9 @@ export class RecipesService {
       if (dto.name !== undefined) data.name = dto.name;
       if (dto.kind !== undefined) data.kind = dto.kind;
       if (dto.yield !== undefined) data.yield = dto.yield;
+      if (dto.emoji !== undefined) data.emoji = dto.emoji;
+      if (dto.description !== undefined) data.description = dto.description;
+      if (dto.prepMinutes !== undefined) data.prepMinutes = dto.prepMinutes;
       if (dto.items !== undefined) {
         await this.validateRefs(tx, dto.items);
         await tx.recipeItem.deleteMany({ where: { recipeId: id } });
@@ -231,6 +253,9 @@ export class RecipesService {
       kind: recipe.kind,
       yield: recipe.yield.toString(),
       version: recipe.version,
+      emoji: recipe.emoji,
+      description: recipe.description,
+      prepMinutes: recipe.prepMinutes,
       totalCost: total.toFixed(2),
       costPerYield: perYield.toFixed(2),
       items: itemViews,

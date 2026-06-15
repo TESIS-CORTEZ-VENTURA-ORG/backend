@@ -18,6 +18,7 @@ export interface IngredientView {
   unit: string;
   category: string | null;
   unitCost: string; // S/ como string para no perder precisión (Decimal)
+  updatedAt: string;
 }
 
 function toView(i: Ingredient): IngredientView {
@@ -29,6 +30,7 @@ function toView(i: Ingredient): IngredientView {
     unit: i.unit,
     category: i.category,
     unitCost: i.unitCost.toFixed(2),
+    updatedAt: i.updatedAt.toISOString(),
   };
 }
 

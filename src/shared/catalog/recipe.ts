@@ -19,6 +19,9 @@ export const createRecipeSchema = z.object({
   name: z.string().min(1),
   kind: recipeKindSchema.optional(),
   yield: z.number().positive().optional(),
+  emoji: z.string().optional(),
+  description: z.string().optional(),
+  prepMinutes: z.number().int().positive().optional(),
   items: z.array(recipeItemSchema).min(1),
 });
 export type CreateRecipeInput = z.infer<typeof createRecipeSchema>;
@@ -27,6 +30,9 @@ export const updateRecipeSchema = z.object({
   name: z.string().min(1).optional(),
   kind: recipeKindSchema.optional(),
   yield: z.number().positive().optional(),
+  emoji: z.string().nullable().optional(),
+  description: z.string().nullable().optional(),
+  prepMinutes: z.number().int().positive().nullable().optional(),
   items: z.array(recipeItemSchema).min(1).optional(),
 });
 export type UpdateRecipeInput = z.infer<typeof updateRecipeSchema>;
