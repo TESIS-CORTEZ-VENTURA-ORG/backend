@@ -5,6 +5,7 @@ import { PlatformModule } from '../platform/platform.module';
 import { CategoriesController } from './categories.controller';
 import { CategoriesService } from './categories.service';
 import { IngredientsController } from './ingredients.controller';
+import { IngredientsImportService } from './ingredients-import.service';
 import { IngredientsService } from './ingredients.service';
 import { MenuAvailabilityController } from './menu-availability.controller';
 import { MenuAvailabilityService } from './menu-availability.service';
@@ -40,6 +41,7 @@ import { UnitsService } from './units.service';
   ],
   providers: [
     IngredientsService,
+    IngredientsImportService,
     UnitsService,
     CategoriesService,
     SuppliersService,
