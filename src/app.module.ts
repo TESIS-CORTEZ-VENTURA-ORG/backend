@@ -1,10 +1,8 @@
 import { Module } from '@nestjs/common';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
+import { PlatformModule } from './platform/platform.module';
 
+/** Raíz de composición: importa los módulos por bounded context (backend.md §3). */
 @Module({
-  imports: [],
-  controllers: [AppController],
-  providers: [AppService],
+  imports: [PlatformModule],
 })
 export class AppModule {}
