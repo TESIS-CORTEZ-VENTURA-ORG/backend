@@ -55,18 +55,18 @@
 |---|---|---|---|---|
 | HU-03-01 | Configurar zonas y mesas | 🟢 Hecho | `HU-03-01-02-salon` | #21 |
 | HU-03-02 | Mapa de mesas con estado | 🟢 Hecho (datos; real-time vía polling) | `HU-03-01-02-salon` | #21 |
-| HU-03-03 | Abrir mesa | 🔲 Pendiente (Inc B) | — | — |
-| HU-03-04 | Tomar orden | 🔲 Pendiente (Inc B) | — | — |
-| HU-03-05 | Aplicar modificadores | 🔲 Pendiente (Inc B) | — | — |
+| HU-03-03 | Abrir mesa | 🟢 Hecho | `HU-03-03-04-05-10-11-12-orders` | #22 |
+| HU-03-04 | Tomar orden | 🟢 Hecho | `HU-03-03-04-05-10-11-12-orders` | #22 |
+| HU-03-05 | Aplicar modificadores | 🟢 Hecho | `HU-03-03-04-05-10-11-12-orders` | #22 |
 | HU-03-06 | Enviar comanda a cocina | 🔲 Pendiente (Inc C) | — | — |
 | HU-03-07 | Vista KDS por estación | 🔲 Pendiente (Inc C) | — | — |
 | HU-03-08 | Marcar ítem en preparación | 🔲 Pendiente (Inc C) | — | — |
 | HU-03-09 | Marcar ítem listo | 🔲 Pendiente (Inc C) | — | — |
-| HU-03-10 | Marcar ítem servido | 🔲 Pendiente (Inc B) | — | — |
-| HU-03-11 | Anular orden con razón | 🔲 Pendiente (Inc B) | — | — |
-| HU-03-12 | Solicitar cuenta | 🔲 Pendiente (Inc B) | — | — |
+| HU-03-10 | Marcar ítem servido | 🟢 Hecho | `HU-03-03-04-05-10-11-12-orders` | #22 |
+| HU-03-11 | Anular orden con razón | 🟢 Hecho | `HU-03-03-04-05-10-11-12-orders` | #22 |
+| HU-03-12 | Solicitar cuenta | 🟢 Hecho (vía `PATCH /api/tables {status:'bill'}`) | `HU-03-03-04-05-10-11-12-orders` | #22 |
 
-**E03: 2/12 (Inc A — salón).** Próximo: Inc B (órdenes: abrir mesa, tomar orden, modificadores, servido, anular, cuenta) + Inc C (cocina/KDS). Real-time por polling (push SSE = mejora). Nota: el frontend NO tiene pantalla KDS aún (se construirá).
+**E03: 8/12** (Inc A — salón: 2 · Inc B — órdenes: 6). Pendiente: **Inc C** (cocina/KDS: HU-03-06/07/08/09). Real-time por polling (push SSE = mejora). HU-03-12 "solicitar cuenta" no añade endpoint: reutiliza `PATCH /api/tables/:id { status:'bill' }`. Nota: el frontend NO tiene pantalla KDS aún (se construirá).
 
 ## E12 — Plataforma (lo tocado)
 | HU | Título | Estado | Spec | PR |
