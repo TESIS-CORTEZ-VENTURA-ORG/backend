@@ -36,6 +36,22 @@ bunx prisma migrate dev   # DB migrations (needs DATABASE_URL in .env)
 
 Copy `.env.example` → `.env` before running anything that touches the DB.
 
+## Base de datos local (desarrollo) — DECISIÓN (leer: dev partner + herramientas IA)
+
+Para **dev/pruebas la DB corre localmente vía Docker** (Neon es solo producción/CI).
+
+```bash
+docker compose up -d     # Postgres 17 + pgvector; crea la base gastronomia_dev
+docker compose down      # detiene (datos persisten en el volumen gastronomia_pgdata)
+docker compose down -v   # detiene y BORRA los datos
+```
+
+- `docker-compose.yml` usa **`pgvector/pgvector:pg17`** (PG17 + pgvector, listo para E09/RAG).
+- `.env` apunta ahí: `DATABASE_URL=postgresql://postgres:postgres@localhost:5432/gastronomia_dev`.
+- **NO actualizar a Prisma 7** aunque el CLI lo sugiera — el stack está fijado en **Prisma 6** a propósito (el scaffold se bajó de 7 → 6 para alinear con la arquitectura firmada).
+- **pgvector**: la imagen lo trae, pero falta `CREATE EXTENSION vector;` en una migración cuando llegue E09.
+- **RLS (crítico):** `postgres` es **superuser → bypasea RLS** (incluso FORCE). La suite RLS de E01 (4 vectores) exige un **rol NO-superuser** dueño de las tablas; se crea al construir `auth`+`tenants`.
+
 ## Architecture & boundaries (`backend.md` §3, §5)
 
 - **Modular monolith**: one NestJS module per bounded context (`auth`, `tenants`, `catalog`, `bom`, `pos`, `billing`, `inventory`, `costing`, `reports`, `forecasting-orchestrator`, `chat-orchestrator`, `notifications`, `ingestion`, `platform`).

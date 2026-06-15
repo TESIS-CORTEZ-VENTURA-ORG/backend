@@ -1,0 +1,31 @@
+# Postgres local para DESARROLLO/pruebas — mismo entorno para todo el equipo.
+# Decisión documentada en CLAUDE.md ("Base de datos local") y backend.md §9.
+#
+#   docker compose up -d      # levanta la DB (crea gastronomia_dev en el primer arranque)
+#   docker compose down       # la detiene (los datos persisten en el volumen)
+#   docker compose down -v    # la detiene y BORRA los datos
+#
+# Producción usa Neon (PG17 + pgvector); esto es SOLO dev.
+# Imagen pgvector/pgvector:pg17 = PostgreSQL 17 + extensión pgvector (necesaria en E09/RAG;
+# recuerda CREATE EXTENSION vector; en una migración cuando llegue ese módulo).
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: gastronomia-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres # solo dev local — NO usar en prod
+      POSTGRES_DB: gastronomia_dev
+    ports:
+      - '5432:5432'
+    volumes:
+      - gastronomia_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d gastronomia_dev']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  gastronomia_pgdata:

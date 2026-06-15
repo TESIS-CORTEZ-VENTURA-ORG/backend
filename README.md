@@ -23,7 +23,20 @@
 
 ## Description
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+**GastronomIA backend** — NestJS 11 + Fastify. Arquitectura completa en `backend.md` / `CLAUDE.md`. Gestor de paquetes: **Bun**.
+
+## Base de datos local (desarrollo)
+
+Para dev/pruebas la DB corre **localmente con Docker** (producción usa Neon). Setup:
+
+```bash
+cp .env.example .env       # DATABASE_URL ya apunta a la DB local
+docker compose up -d       # Postgres 17 + pgvector; crea la base gastronomia_dev
+bun install
+bun run start:dev
+```
+
+`docker-compose.yml` usa `pgvector/pgvector:pg17` (PG17 + pgvector para el RAG de E09). **No actualices Prisma a 7** (el stack está fijado en Prisma 6). Comandos canónicos en `CLAUDE.md`.
 
 ## Project setup
 
