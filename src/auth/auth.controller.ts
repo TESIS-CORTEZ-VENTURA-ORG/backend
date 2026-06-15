@@ -4,18 +4,22 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Patch,
   Post,
   UseGuards,
 } from '@nestjs/common';
+import { Audited } from '../audit/audited.decorator';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { PrismaService } from '../platform/prisma/prisma.service';
 import {
+  changePasswordSchema,
   loginSchema,
   ok,
   refreshSchema,
   registerSchema,
   type ApiResponse,
   type AuthTokens,
+  type ChangePasswordInput,
   type JwtClaims,
   type LoginInput,
   type RefreshInput,
@@ -69,6 +73,18 @@ export class AuthController {
   ): Promise<ApiResponse<{ revoked: true }>> {
     await this.auth.logout(body.refreshToken);
     return ok({ revoked: true });
+  }
+
+  @Patch('password')
+  @UseGuards(JwtAuthGuard)
+  @Audited('password.change')
+  async changePassword(
+    @CurrentUser() claims: JwtClaims,
+    @Body(new ZodValidationPipe(changePasswordSchema))
+    body: ChangePasswordInput,
+  ): Promise<ApiResponse<{ changed: true }>> {
+    await this.auth.changePassword(claims.sub, claims.tenant_id, body);
+    return ok({ changed: true });
   }
 
   @Get('me')
