@@ -50,6 +50,24 @@
 
 **E02: 13/14 hechas** (Inc A–F). Única diferida: **HU-02-14** foto del plato (requiere object storage R2 — servicio externo). Todo lo construible vía código está completo.
 
+## E03 — POS, Salón y Cocina/KDS (12 HU)
+| HU | Título | Estado | Spec | PR |
+|---|---|---|---|---|
+| HU-03-01 | Configurar zonas y mesas | 🟢 Hecho | `HU-03-01-02-salon` | #21 |
+| HU-03-02 | Mapa de mesas con estado | 🟢 Hecho (datos; real-time vía polling) | `HU-03-01-02-salon` | #21 |
+| HU-03-03 | Abrir mesa | 🔲 Pendiente (Inc B) | — | — |
+| HU-03-04 | Tomar orden | 🔲 Pendiente (Inc B) | — | — |
+| HU-03-05 | Aplicar modificadores | 🔲 Pendiente (Inc B) | — | — |
+| HU-03-06 | Enviar comanda a cocina | 🔲 Pendiente (Inc C) | — | — |
+| HU-03-07 | Vista KDS por estación | 🔲 Pendiente (Inc C) | — | — |
+| HU-03-08 | Marcar ítem en preparación | 🔲 Pendiente (Inc C) | — | — |
+| HU-03-09 | Marcar ítem listo | 🔲 Pendiente (Inc C) | — | — |
+| HU-03-10 | Marcar ítem servido | 🔲 Pendiente (Inc B) | — | — |
+| HU-03-11 | Anular orden con razón | 🔲 Pendiente (Inc B) | — | — |
+| HU-03-12 | Solicitar cuenta | 🔲 Pendiente (Inc B) | — | — |
+
+**E03: 2/12 (Inc A — salón).** Próximo: Inc B (órdenes: abrir mesa, tomar orden, modificadores, servido, anular, cuenta) + Inc C (cocina/KDS). Real-time por polling (push SSE = mejora). Nota: el frontend NO tiene pantalla KDS aún (se construirá).
+
 ## E12 — Plataforma (lo tocado)
 | HU | Título | Estado | Spec | PR |
 |---|---|---|---|---|
