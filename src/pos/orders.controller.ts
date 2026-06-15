@@ -79,6 +79,17 @@ export class OrdersController {
     return ok(await this.orders.updateItem(claims.tenant_id, id, itemId, dto));
   }
 
+  // HU-03-06 · Enviar comanda a cocina (rutea ítems a sus estaciones).
+  @Post(':id/send-to-kitchen')
+  @RequireAbility('update', 'Order')
+  @Audited('order.send_to_kitchen')
+  async sendToKitchen(
+    @CurrentUser() claims: JwtClaims,
+    @Param('id') id: string,
+  ): Promise<ApiResponse<OrderView>> {
+    return ok(await this.orders.sendToKitchen(claims.tenant_id, id));
+  }
+
   // HU-03-11 · Anular orden con razón (libera la mesa).
   @Post(':id/void')
   @RequireAbility('update', 'Order')

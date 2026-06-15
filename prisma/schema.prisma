@@ -45,8 +45,27 @@ model Tenant {
   zones          Zone[]
   diningTables   DiningTable[]
   orders         Order[]
+  kitchenStations KitchenStation[]
 
   @@map("tenants")
+}
+
+// HU-03-07: estación de cocina (parrilla, frío, barra…). Enruta los ítems de una
+// orden hacia un puesto del KDS vía la categoría de menú del plato. position = orden visual.
+model KitchenStation {
+  id        String    @id @default(uuid()) @db.Uuid
+  tenantId  String    @map("tenant_id") @db.Uuid
+  name      String
+  position  Int       @default(0)
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  tenant         Tenant         @relation(fields: [tenantId], references: [id])
+  menuCategories MenuCategory[]
+
+  @@index([tenantId])
+  @@map("kitchen_stations")
 }
 
 // HU-03-01: zona del salón (terraza, salón, barra…). position = orden visual.
@@ -185,12 +204,15 @@ model MenuCategory {
   name      String
   position  Int       @default(0)
   isActive  Boolean   @default(true) @map("is_active")
+  // HU-03-07: estación de cocina destino para los platos de esta categoría (opcional).
+  kitchenStationId String? @map("kitchen_station_id") @db.Uuid
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
 
-  tenant Tenant     @relation(fields: [tenantId], references: [id])
-  items  MenuItem[]
+  tenant         Tenant          @relation(fields: [tenantId], references: [id])
+  kitchenStation KitchenStation? @relation(fields: [kitchenStationId], references: [id])
+  items          MenuItem[]
 
   @@index([tenantId])
   @@map("menu_categories")

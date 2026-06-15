@@ -1,10 +1,12 @@
 import { z } from 'zod';
 
 // HU-02-12 · Categoría de la carta (entradas, principales, postres, bebidas).
+// HU-03-07: kitchenStationId enruta los platos de la categoría a una estación de cocina.
 export const createMenuCategorySchema = z.object({
   name: z.string().min(1),
   position: z.number().int().min(0).optional(),
   isActive: z.boolean().optional(),
+  kitchenStationId: z.uuid().nullable().optional(),
 });
 export type CreateMenuCategoryInput = z.infer<typeof createMenuCategorySchema>;
 
@@ -12,6 +14,7 @@ export const updateMenuCategorySchema = z.object({
   name: z.string().min(1).optional(),
   position: z.number().int().min(0).optional(),
   isActive: z.boolean().optional(),
+  kitchenStationId: z.uuid().nullable().optional(),
 });
 export type UpdateMenuCategoryInput = z.infer<typeof updateMenuCategorySchema>;
 

@@ -14,10 +14,17 @@ export interface MenuCategoryView {
   name: string;
   position: number;
   isActive: boolean;
+  kitchenStationId: string | null;
 }
 
 function toView(c: MenuCategory): MenuCategoryView {
-  return { id: c.id, name: c.name, position: c.position, isActive: c.isActive };
+  return {
+    id: c.id,
+    name: c.name,
+    position: c.position,
+    isActive: c.isActive,
+    kitchenStationId: c.kitchenStationId,
+  };
 }
 
 @Injectable()
@@ -45,6 +52,7 @@ export class MenuCategoriesService {
           name: dto.name,
           position: dto.position ?? 0,
           isActive: dto.isActive ?? true,
+          kitchenStationId: dto.kitchenStationId ?? null,
         },
       }),
     );
@@ -62,6 +70,9 @@ export class MenuCategoriesService {
       if (dto.name !== undefined) data.name = dto.name;
       if (dto.position !== undefined) data.position = dto.position;
       if (dto.isActive !== undefined) data.isActive = dto.isActive;
+      if (dto.kitchenStationId !== undefined) {
+        data.kitchenStationId = dto.kitchenStationId;
+      }
       return tx.menuCategory.update({ where: { id }, data });
     });
     return toView(row);

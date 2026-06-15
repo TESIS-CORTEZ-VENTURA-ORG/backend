@@ -7,6 +7,11 @@ import {
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../platform/prisma/prisma.service';
 import { type CreateTableInput, type UpdateTableInput } from '../shared';
+import {
+  OrdersService,
+  type OrderView,
+  type TableOrderSummary,
+} from './orders.service';
 
 type Tx = Prisma.TransactionClient;
 type TableRow = Prisma.DiningTableGetPayload<{ include: { zone: true } }>;
@@ -20,9 +25,19 @@ export interface TableView {
   status: string;
   posX: number | null;
   posY: number | null;
+  // Derivados de la orden actual de la mesa (null cuando está libre).
+  currentOrderId: string | null;
+  openedAt: string | null;
+  guests: number | null;
+  waiterId: string | null;
 }
 
-function toView(t: TableRow): TableView {
+export interface TableDetailView {
+  table: TableView;
+  order: OrderView | null;
+}
+
+function toView(t: TableRow, summary?: TableOrderSummary): TableView {
   return {
     id: t.id,
     zoneId: t.zoneId,
@@ -32,12 +47,19 @@ function toView(t: TableRow): TableView {
     status: t.status,
     posX: t.posX,
     posY: t.posY,
+    currentOrderId: summary?.currentOrderId ?? null,
+    openedAt: summary?.openedAt ?? null,
+    guests: summary?.guests ?? null,
+    waiterId: summary?.waiterId ?? null,
   };
 }
 
 @Injectable()
 export class TablesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly orders: OrdersService,
+  ) {}
 
   async list(tenantId: string): Promise<TableView[]> {
     const rows = await this.prisma.runInTenant(tenantId, (tx) =>
@@ -47,7 +69,26 @@ export class TablesService {
         orderBy: { code: 'asc' },
       }),
     );
-    return rows.map(toView);
+    // Enriquecer con la orden actual de cada mesa (una sola consulta → sin N+1).
+    const summaries = await this.orders.currentSummariesByTable(tenantId);
+    return rows.map((row) => toView(row, summaries.get(row.id)));
+  }
+
+  /** Read-model del POS: la mesa + su orden actual (o null si está libre). */
+  async getOne(tenantId: string, id: string): Promise<TableDetailView> {
+    const row = await this.prisma.runInTenant(tenantId, (tx) =>
+      this.find(tx, id),
+    );
+    const order = await this.orders.findCurrentForTable(tenantId, id);
+    const summary: TableOrderSummary | undefined = order
+      ? {
+          currentOrderId: order.id,
+          openedAt: order.openedAt,
+          guests: order.guests,
+          waiterId: order.waiterId,
+        }
+      : undefined;
+    return { table: toView(row, summary), order };
   }
 
   async create(tenantId: string, dto: CreateTableInput): Promise<TableView> {

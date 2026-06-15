@@ -26,6 +26,17 @@ interface ModifierSnapshot {
 // Estados desde los que se puede anular una orden (HU-03-11).
 const VOIDABLE_STATUSES = new Set(['open', 'sent_to_kitchen', 'served']);
 
+// Estados de una orden "viva" (la cuenta actual de una mesa ocupada).
+const CURRENT_ORDER_STATUSES = ['open', 'sent_to_kitchen', 'served'];
+
+// Resumen de la orden actual de una mesa (para enriquecer el listado de mesas).
+export interface TableOrderSummary {
+  currentOrderId: string;
+  openedAt: string;
+  guests: number;
+  waiterId: string | null;
+}
+
 export interface OrderItemView {
   id: string;
   menuItemId: string;
@@ -159,6 +170,58 @@ export class OrdersService {
     });
   }
 
+  /**
+   * Orden "actual" de una mesa (la cuenta abierta): status ∈
+   * {open, sent_to_kitchen, served}, no borrada. Devuelve null si la mesa no
+   * tiene cuenta activa. Soporta el read-model del POS (GET /api/tables/:id).
+   */
+  async findCurrentForTable(
+    tenantId: string,
+    tableId: string,
+  ): Promise<OrderView | null> {
+    return this.prisma.runInTenant(tenantId, async (tx) => {
+      const order = await tx.order.findFirst({
+        where: {
+          tableId,
+          deletedAt: null,
+          status: { in: CURRENT_ORDER_STATUSES },
+        },
+        orderBy: { openedAt: 'desc' },
+      });
+      return order ? this.buildView(tx, order) : null;
+    });
+  }
+
+  /**
+   * Resumen de la orden actual por mesa (una sola consulta), para enriquecer el
+   * listado de mesas sin N+1. Devuelve un Map tableId → resumen.
+   */
+  async currentSummariesByTable(
+    tenantId: string,
+  ): Promise<Map<string, TableOrderSummary>> {
+    return this.prisma.runInTenant(tenantId, async (tx) => {
+      const orders = await tx.order.findMany({
+        where: {
+          deletedAt: null,
+          status: { in: CURRENT_ORDER_STATUSES },
+        },
+        orderBy: { openedAt: 'desc' },
+      });
+      const byTable = new Map<string, TableOrderSummary>();
+      for (const order of orders) {
+        // orderBy desc → el primero por mesa es el más reciente; no sobrescribir.
+        if (byTable.has(order.tableId)) continue;
+        byTable.set(order.tableId, {
+          currentOrderId: order.id,
+          openedAt: order.openedAt.toISOString(),
+          guests: order.guests,
+          waiterId: order.waiterId,
+        });
+      }
+      return byTable;
+    });
+  }
+
   /** HU-03-04/05 · Tomar orden: añade ítems con sus modificadores (precio snapshot). */
   async addItems(
     tenantId: string,
@@ -251,6 +314,57 @@ export class OrdersService {
       }
       await tx.orderItem.update({ where: { id: itemId }, data });
       return this.buildView(tx, order);
+    });
+  }
+
+  /**
+   * HU-03-06 · Enviar comanda a cocina. La orden debe estar `open` con ≥1 ítem
+   * `pending`. Marca la orden como `sent_to_kitchen` (sentToKitchenAt=now) y, por
+   * cada ítem pending sin enviar, sella sentToKitchenAt y enruta a su estación
+   * (menuItem → menuCategory → kitchenStationId; puede quedar null).
+   */
+  async sendToKitchen(tenantId: string, id: string): Promise<OrderView> {
+    return this.prisma.runInTenant(tenantId, async (tx) => {
+      const order = await this.find(tx, id);
+      if (order.status !== 'open') {
+        throw new ConflictException(
+          'Solo se puede enviar a cocina una orden abierta',
+        );
+      }
+      const pending = await tx.orderItem.findMany({
+        where: {
+          orderId: order.id,
+          deletedAt: null,
+          status: 'pending',
+          sentToKitchenAt: null,
+        },
+      });
+      if (pending.length === 0) {
+        throw new BadRequestException(
+          'No hay ítems pendientes por enviar a cocina',
+        );
+      }
+
+      const now = new Date();
+      for (const item of pending) {
+        // Estación destino vía la categoría del plato (puede no existir → null).
+        const menuItem = await tx.menuItem.findFirst({
+          where: { id: item.menuItemId },
+          include: { menuCategory: true },
+        });
+        const kitchenStationId =
+          menuItem?.menuCategory?.kitchenStationId ?? null;
+        await tx.orderItem.update({
+          where: { id: item.id },
+          data: { sentToKitchenAt: now, kitchenStationId },
+        });
+      }
+
+      const updated = await tx.order.update({
+        where: { id: order.id },
+        data: { status: 'sent_to_kitchen', sentToKitchenAt: now },
+      });
+      return this.buildView(tx, updated);
     });
   }
 
