@@ -7,3 +7,4 @@ export * from './auth/app-role';
 export * from './auth/auth.schema';
 export * from './auth/tokens';
 export * from './tenant/jwt-claims';
+export * from './tenant/settings';
