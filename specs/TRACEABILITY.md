@@ -1,7 +1,7 @@
 # Trazabilidad Backlog ↔ Implementación — Backend GastronomIA
 
 > Mapea las HU de `Product Backlog.md` (fuente de verdad) con specs, PRs y tests.
-> Evidencia de trazabilidad (ABET SO7). Actualizado: 2026-06-15 (E04 Inc 2 — división de cuenta + cierre Z; E04 8/8).
+> Evidencia de trazabilidad (ABET SO7). Actualizado: 2026-06-15 (E06 Inc 1 — costeo: CIF, prorrateo, costo/margen por plato y sugerencia de precio; E06 5/7).
 
 ## Decisiones de reconciliación
 1. **Roles = 3** (`owner`/`manager`/`staff`), no los 5 del backlog original. HU-01-04 actualizado.
@@ -100,6 +100,19 @@
 | HU-05-11 | Detectar anomalías de mermas con IA | 🔲 Diferido (IA/E08) | — | — |
 
 **E05: 9/11 backend** (Inc 1 = 6 · Inc 2 = 3) + HU-05-05 status-only. **Inc 1** (#24): stock/kardex, movimientos (entrada/salida), mermas con razón, histórico de mermas y alertas de stock bajo (`inventory_movements`, RLS FORCE, kardex event-sourced con delta firmado; `ingredients` gana `stock`/`minStock` `Decimal(12,3)`). **Inc 2** (#25): órdenes de compra — `purchase_orders` + `purchase_order_items` (RLS FORCE ambas, FK PO `ON DELETE CASCADE`), `PurchaseOrders{Controller,Service}` en el módulo `inventory`. HU-05-04 crear (`draft`, `total = Σ qtyOrdered·unitCost`); HU-05-06 recepcionar parcial/total → crea movimiento `purchase` + sube `stock` + fija `unitCost` (last purchase price), estado `partially_received`/`received` (reutiliza la lógica de movimiento de Inc 1, misma transacción `runInTenant`); HU-05-07 cancelar (`{draft,sent}→cancelled`, 409 si ya recibió). **HU-05-05** = solo transición `draft→sent`; el **email/PDF al proveedor está diferido** (servicio de correo externo, como E01). **HU-05-11** anomalías de merma = **servicio de IA (E08)**, diferido. Endpoints Inc 2: `POST/GET /api/purchase-orders`, `GET /api/purchase-orders/:id`, `POST /api/purchase-orders/:id/{send,receive,cancel}`.
+
+## E06 — Costeo Dinámico y Márgenes (7 HU)
+| HU | Título | Estado | Spec | PR |
+|---|---|---|---|---|
+| HU-06-01 | Cálculo dinámico de costo por plato | 🟢 Hecho | `HU-06-01-05-costeo` | #28 |
+| HU-06-02 | Gestión de costos indirectos (CIF) mensuales | 🟢 Hecho | `HU-06-01-05-costeo` | #28 |
+| HU-06-03 | Distribución prorrateada de CIF | 🟢 Hecho | `HU-06-01-05-costeo` | #28 |
+| HU-06-04 | Cálculo de margen unitario por plato | 🟢 Hecho | `HU-06-01-05-costeo` | #28 |
+| HU-06-05 | Sugerencia de precio por margen objetivo | 🟢 Hecho (fórmula, sin IA) | `HU-06-01-05-costeo` | #28 |
+| HU-06-06 | Cierre de período mensual | 🔲 Inc 2 (pendiente) | — | — |
+| HU-06-07 | Comparativo Costo Real vs Costo Teórico | 🔲 Inc 2 (pendiente) | — | — |
+
+**E06: 5/7 backend (Inc 1)** — módulo nuevo `costing` (`CostingController` + `CostingService` + `OverheadController` + `OverheadService`). Esquema nuevo `overhead_costs` (`OverheadCost`, RLS FORCE verificado `relforcerowsecurity='t'`; índices `tenantId`+`period`; soft-delete; relación `Tenant→overheadCosts`). **Reutiliza** `RecipesService.costPerYieldTx` (BOM recursivo) para el costo de ingredientes — `CatalogModule` ahora **exporta** `RecipesService`. **CASL:** se **reutiliza el sujeto `Report`** (no se crea sujeto `Costing`): costeo = info de gestión → lectura (`read Report`) y escritura de CIF (`manage Report`) = owner/manager; **staff → 403** (aserción en `casl-ability.factory.spec.ts`). **HU-06-02** CRUD `/api/overhead-costs` (`{ period:YYYY-MM, concept, amount }`, `@Audited`). **HU-06-01/03/04** `GET /api/costing/dishes?period=` → por plato activo: `ingredientCost` (receta), `unitsSold` (Σ qty de `order_items` de ventas `issued` con `issuedAt` en el mes), `cifPerUnit` (= `totalCIF/totalUnits`, **prorrateo por partes iguales por unidad vendida**; `allocationBase='units'`; si `totalUnits=0` → 0), `fullCost` (= ingredientes + CIF), `foodCostPct`, `marginPct`, `contributionMargin` (moneda string). **HU-06-05** `GET /api/costing/suggest-price?menuItemId=&targetMarginPct=&period=` → `suggestedPrice = fullCost/(1−targetMarginPct/100)`, `targetMarginPct∈[0,99]` (**fórmula determinista, sin IA** pese al cross-ref HU-09-01; el impacto de demanda/forecast y alerta +20% se difieren a E08). **HU-06-06** (cierre de período inmutable) y **HU-06-07** (real vs teórico, consumirá `inventory_movements`) → **Inc 2**.
 
 ## E12 — Plataforma (lo tocado)
 | HU | Título | Estado | Spec | PR |
