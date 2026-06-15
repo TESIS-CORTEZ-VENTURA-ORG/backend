@@ -1,38 +1,23 @@
 import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import {
-  jwtClaimsSchema,
-  type AppRole,
-  type AuthTokens,
-  type JwtClaims,
-} from '../shared';
+import { jwtClaimsSchema, type AppRole, type JwtClaims } from '../shared';
 
 const ACCESS_TTL = '15m';
-const REFRESH_TTL = '7d';
 
-/** Emite/valida JWT RS256 (backend.md §4). Claims: sub, tenant_id, roles. */
+/** Access token JWT RS256 (15m). El refresh es opaco (ver RefreshTokenService). */
 @Injectable()
 export class TokenService {
   constructor(private readonly jwt: JwtService) {}
 
-  async issue(input: {
+  issueAccess(input: {
     sub: string;
     tenant_id: string;
     roles: AppRole[];
-  }): Promise<AuthTokens> {
-    const claims = {
-      sub: input.sub,
-      tenant_id: input.tenant_id,
-      roles: input.roles,
-    };
-    const accessToken = await this.jwt.signAsync(claims, {
-      expiresIn: ACCESS_TTL,
-    });
-    const refreshToken = await this.jwt.signAsync(
-      { sub: input.sub },
-      { expiresIn: REFRESH_TTL },
+  }): Promise<string> {
+    return this.jwt.signAsync(
+      { sub: input.sub, tenant_id: input.tenant_id, roles: input.roles },
+      { expiresIn: ACCESS_TTL },
     );
-    return { accessToken, refreshToken };
   }
 
   async verifyAccess(token: string): Promise<JwtClaims> {

@@ -19,14 +19,12 @@ describe('TokenService (RS256)', () => {
   const service = new TokenService(jwt);
   const tenant = '550e8400-e29b-41d4-a716-446655440000';
 
-  it('issue → verifyAccess preserva los claims', async () => {
-    const { accessToken, refreshToken } = await service.issue({
+  it('issueAccess → verifyAccess preserva los claims', async () => {
+    const accessToken = await service.issueAccess({
       sub: 'user-1',
       tenant_id: tenant,
       roles: ['owner'],
     });
-    expect(refreshToken.length).toBeGreaterThan(0);
-
     const claims = await service.verifyAccess(accessToken);
     expect(claims.sub).toBe('user-1');
     expect(claims.tenant_id).toBe(tenant);

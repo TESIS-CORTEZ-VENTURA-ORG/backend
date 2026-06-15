@@ -12,11 +12,13 @@ import { PrismaService } from '../platform/prisma/prisma.service';
 import {
   loginSchema,
   ok,
+  refreshSchema,
   registerSchema,
   type ApiResponse,
   type AuthTokens,
   type JwtClaims,
   type LoginInput,
+  type RefreshInput,
   type RegisterInput,
 } from '../shared';
 import { AuthService } from './auth.service';
@@ -52,10 +54,26 @@ export class AuthController {
     return ok(await this.auth.login(input));
   }
 
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  async refresh(
+    @Body(new ZodValidationPipe(refreshSchema)) body: RefreshInput,
+  ): Promise<ApiResponse<AuthTokens>> {
+    return ok(await this.auth.refresh(body.refreshToken));
+  }
+
+  @Post('logout')
+  @HttpCode(HttpStatus.OK)
+  async logout(
+    @Body(new ZodValidationPipe(refreshSchema)) body: RefreshInput,
+  ): Promise<ApiResponse<{ revoked: true }>> {
+    await this.auth.logout(body.refreshToken);
+    return ok({ revoked: true });
+  }
+
   @Get('me')
   @UseGuards(JwtAuthGuard)
   async me(@CurrentUser() claims: JwtClaims): Promise<ApiResponse<MeView>> {
-    // Cierra el lazo JWT → runInTenant → RLS: lee al usuario en su contexto de tenant.
     const user = await this.prisma.runInTenant(claims.tenant_id, (tx) =>
       tx.user.findUniqueOrThrow({ where: { id: claims.sub } }),
     );
