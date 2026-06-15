@@ -23,7 +23,11 @@ import {
   type JwtClaims,
   type UpdateTableInput,
 } from '../shared';
-import { TablesService, type TableView } from './tables.service';
+import {
+  TablesService,
+  type TableDetailView,
+  type TableView,
+} from './tables.service';
 
 @Controller('tables')
 @UseGuards(JwtAuthGuard, PoliciesGuard)
@@ -36,6 +40,16 @@ export class TablesController {
     @CurrentUser() claims: JwtClaims,
   ): Promise<ApiResponse<TableView[]>> {
     return ok(await this.tables.list(claims.tenant_id));
+  }
+
+  // Read-model del POS: la mesa + su orden actual (HU-03-03..12 unblock frontend).
+  @Get(':id')
+  @RequireAbility('read', 'Table')
+  async getOne(
+    @CurrentUser() claims: JwtClaims,
+    @Param('id') id: string,
+  ): Promise<ApiResponse<TableDetailView>> {
+    return ok(await this.tables.getOne(claims.tenant_id, id));
   }
 
   // Configurar el salón (crear/eliminar mesas) = manager. Operar (PATCH estado) = staff.
