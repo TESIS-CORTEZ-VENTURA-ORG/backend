@@ -112,6 +112,10 @@ Fuga cross-tenant = evento de mayor severidad del proyecto (prob. baja, impacto 
 
 ## 5. Bounded contexts (módulos NestJS) — alcance MVP (102 HU / 427 SP)
 
+> **HU = `Product Backlog.md`** (fuente de verdad: IDs `HU-XX-YY` + criterios Gherkin).
+> Trazabilidad implementación↔HU en `specs/TRACEABILITY.md`. **Roles reconciliados a 3**
+> (`owner`/`manager`/`staff`; HU-01-04 actualizado). La suite RLS es **HU-12-06** (E12/S0).
+
 | ID | Bounded Context / Módulo NestJS | Sprint | MoSCoW | Tablas propias (núcleo) |
 |---|---|---|---|---|
 | **E01** | `auth` + `tenants` — Identity, Multi-Tenancy, Seguridad | S1 | MUST | `tenants`, `users`, `organizations`, `invitations` |
