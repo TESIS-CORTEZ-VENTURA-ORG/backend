@@ -9,3 +9,5 @@ export * from './auth/tokens';
 export * from './tenant/jwt-claims';
 export * from './tenant/settings';
 export * from './catalog/ingredient';
+export * from './catalog/unit';
+export * from './catalog/category';
