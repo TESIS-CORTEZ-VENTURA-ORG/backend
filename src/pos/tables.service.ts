@@ -30,6 +30,7 @@ export interface TableView {
   openedAt: string | null;
   guests: number | null;
   waiterId: string | null;
+  waiterName: string | null;
 }
 
 export interface TableDetailView {
@@ -51,6 +52,7 @@ function toView(t: TableRow, summary?: TableOrderSummary): TableView {
     openedAt: summary?.openedAt ?? null,
     guests: summary?.guests ?? null,
     waiterId: summary?.waiterId ?? null,
+    waiterName: summary?.waiterName ?? null,
   };
 }
 
@@ -86,6 +88,7 @@ export class TablesService {
           openedAt: order.openedAt,
           guests: order.guests,
           waiterId: order.waiterId,
+          waiterName: order.waiterName,
         }
       : undefined;
     return { table: toView(row, summary), order };

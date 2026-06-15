@@ -35,6 +35,7 @@ export interface TableOrderSummary {
   openedAt: string;
   guests: number;
   waiterId: string | null;
+  waiterName: string | null;
 }
 
 export interface OrderItemView {
@@ -52,6 +53,7 @@ export interface OrderView {
   id: string;
   tableId: string;
   waiterId: string | null;
+  waiterName: string | null;
   guests: number;
   status: string;
   openedAt: string;
@@ -72,7 +74,11 @@ function itemToView(item: OrderItemRow): OrderItemView {
   };
 }
 
-function toView(order: OrderRow, items: OrderItemRow[]): OrderView {
+function toView(
+  order: OrderRow,
+  items: OrderItemRow[],
+  waiterName: string | null,
+): OrderView {
   let subtotal = new Prisma.Decimal(0);
   for (const item of items) {
     subtotal = subtotal.add(item.unitPrice.mul(item.qty));
@@ -81,12 +87,32 @@ function toView(order: OrderRow, items: OrderItemRow[]): OrderView {
     id: order.id,
     tableId: order.tableId,
     waiterId: order.waiterId,
+    waiterName,
     guests: order.guests,
     status: order.status,
     openedAt: order.openedAt.toISOString(),
     items: items.map(itemToView),
     subtotal: subtotal.toFixed(2),
   };
+}
+
+/**
+ * Resuelve el nombre del mesero (User.name) por su id, dentro de la transacción
+ * (tenant-scoped por RLS). null si no hay waiterId o el usuario no existe.
+ * Soporta el `waiterName` de los read models del POS (mapa de mesas).
+ */
+async function resolveWaiterName(
+  tx: Tx,
+  waiterId: string | null,
+): Promise<string | null> {
+  if (!waiterId) {
+    return null;
+  }
+  const user = await tx.user.findFirst({
+    where: { id: waiterId },
+    select: { name: true },
+  });
+  return user?.name ?? null;
 }
 
 @Injectable()
@@ -207,6 +233,22 @@ export class OrdersService {
         },
         orderBy: { openedAt: 'desc' },
       });
+      // Resolver los nombres de los meseros presentes en UNA consulta (sin N+1).
+      const waiterIds = [
+        ...new Set(
+          orders
+            .map((o) => o.waiterId)
+            .filter((id): id is string => id !== null),
+        ),
+      ];
+      const waiters =
+        waiterIds.length > 0
+          ? await tx.user.findMany({
+              where: { id: { in: waiterIds } },
+              select: { id: true, name: true },
+            })
+          : [];
+      const nameById = new Map(waiters.map((w) => [w.id, w.name]));
       const byTable = new Map<string, TableOrderSummary>();
       for (const order of orders) {
         // orderBy desc → el primero por mesa es el más reciente; no sobrescribir.
@@ -216,6 +258,9 @@ export class OrdersService {
           openedAt: order.openedAt.toISOString(),
           guests: order.guests,
           waiterId: order.waiterId,
+          waiterName: order.waiterId
+            ? (nameById.get(order.waiterId) ?? null)
+            : null,
         });
       }
       return byTable;
@@ -413,6 +458,7 @@ export class OrdersService {
       where: { orderId: order.id, deletedAt: null },
       orderBy: { createdAt: 'asc' },
     });
-    return toView(order, items);
+    const waiterName = await resolveWaiterName(tx, order.waiterId);
+    return toView(order, items, waiterName);
   }
 }

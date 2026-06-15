@@ -82,20 +82,21 @@ export interface CostVarianceView {
 const HUNDRED = new Prisma.Decimal(100);
 
 /**
- * HU-06-07 · Aclaración de la limitación del comparativo: hoy pagar una orden NO
- * descuenta stock automáticamente (el cobro no crea un movimiento `sale` de
- * consumo; el enlace POS↔inventario es una integración futura, fuera de alcance).
- * Por eso `realCost` refleja principalmente mermas + salidas manuales, no el
- * consumo teórico de cada venta — no debe leerse como "consumo real total".
+ * HU-06-07 · Aclaración del comparativo: pagar una orden YA descuenta stock
+ * automáticamente (refinamiento POS↔inventario): el cobro explota el BOM de lo
+ * vendido y crea movimientos `type='sale'` de consumo en la misma transacción.
+ * Por eso `realCost` (salidas `type ∈ {sale, waste}`) refleja el consumo real de
+ * las ventas + las mermas. La merma se mantiene en el cálculo (`byType.waste`).
  */
 const COST_VARIANCE_NOTE =
   'realCost se calcula a partir de las salidas registradas en inventario ' +
-  '(type sale/waste). Hoy pagar una orden NO descuenta stock automáticamente: ' +
-  'el cobro no genera un movimiento de consumo (el enlace POS↔inventario es una ' +
-  'integración futura, fuera del alcance de esta HU). Por eso realCost refleja ' +
-  'principalmente mermas + salidas manuales y NO debe leerse como el consumo ' +
-  'real total de todas las ventas; sirve para detectar mermas no registradas o ' +
-  'porciones excesivas sobre las salidas que sí se registran.';
+  '(type sale/waste). Pagar una orden YA descuenta stock automáticamente: el ' +
+  'cobro explota el BOM de lo vendido y genera movimientos de consumo type=sale ' +
+  'en la misma transacción (enlace POS↔inventario). Por eso realCost refleja el ' +
+  'consumo real de las ventas más las mermas (waste); la variance frente al ' +
+  'teórico (BOM por lo vendido) ayuda a detectar mermas no registradas o ' +
+  'porciones excesivas. Nota: el stock puede quedar negativo (una venta nunca se ' +
+  'bloquea por falta de stock) y anular un ticket no reversa el consumo (ajuste manual).';
 
 @Injectable()
 export class CostingService {

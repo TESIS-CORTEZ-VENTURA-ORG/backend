@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { RecipesService } from '../catalog/recipes.service';
 import { PrismaService } from '../platform/prisma/prisma.service';
 import { OrdersService, type OrderView } from '../pos/orders.service';
 import {
@@ -138,6 +139,7 @@ export class BillingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly orders: OrdersService,
+    private readonly recipes: RecipesService,
   ) {}
 
   /**
@@ -245,6 +247,9 @@ export class BillingService {
         where: { id: order.tableId },
         data: { status: 'free' },
       });
+
+      // E05 (refinamiento): auto-descuento de stock por la venta, en la MISMA tx.
+      await this.consumeStockForSale(tx, tenantId, items, sale.id);
 
       // Vista de la orden en la MISMA transacción (ya `paid`); reutiliza OrdersService.
       const orderView = await this.orders.buildView(tx, updatedOrder);
@@ -558,6 +563,88 @@ export class BillingService {
 
   private firstMethod(payments: PaymentRow[]): string {
     return payments[0]?.method ?? 'cash';
+  }
+
+  /**
+   * E05 (refinamiento POS↔inventario) · Auto-descuento de stock al vender. Por
+   * cada `order_item` vivo, resuelve su receta (menuItem → recipeId) y explota el
+   * BOM a cantidades de insumo: consumo de una unidad vendida = `explode(recipe,
+   * 1/recipe.yield)`, multiplicado por `order_item.qty`. Acumula por insumo (UN
+   * movimiento por insumo, no por ítem) y, dentro de la MISMA transacción del
+   * cobro, crea un `inventory_movements` `type='sale'` con `qty` negativo
+   * (`note='Venta <saleId>'`, `userId=null`) y descuenta `ingredient.stock`.
+   *
+   * POLÍTICA DE STOCK NEGATIVO: una venta NUNCA se bloquea por falta de stock —
+   * el cobro ya ocurrió y es la fuente de verdad. Se permite que el stock quede
+   * NEGATIVO (≠ la salida manual HU-05-03, que rechaza negativo); corregirlo es
+   * trabajo de inventario (recepción/ajuste/conteo), no del cajero.
+   */
+  private async consumeStockForSale(
+    tx: Tx,
+    tenantId: string,
+    items: OrderItemRow[],
+    saleId: string,
+  ): Promise<void> {
+    // Acumula la cantidad consumida por insumo en toda la orden.
+    const consumed = new Map<string, Prisma.Decimal>();
+    for (const item of items) {
+      const menuItem = await tx.menuItem.findFirst({
+        where: { id: item.menuItemId },
+        select: { recipeId: true },
+      });
+      if (!menuItem) {
+        continue; // plato sin receta resoluble → no consume (no rompe el cobro)
+      }
+      const recipe = await tx.recipe.findFirst({
+        where: { id: menuItem.recipeId, deletedAt: null },
+        select: { yield: true },
+      });
+      if (!recipe || recipe.yield.isZero()) {
+        continue;
+      }
+      // Consumo de una unidad vendida = explosión del BOM por 1/yield; el ítem
+      // consume eso · qty (el qty es entero, número de platos del ítem).
+      const perUnit = new Prisma.Decimal(1).div(recipe.yield);
+      const multiplier = perUnit.mul(item.qty);
+      const exploded = await this.recipes.explodeIngredientsTx(
+        tx,
+        menuItem.recipeId,
+        multiplier,
+      );
+      for (const [ingredientId, qty] of exploded) {
+        const prev = consumed.get(ingredientId) ?? new Prisma.Decimal(0);
+        consumed.set(ingredientId, prev.add(qty));
+      }
+    }
+
+    // Un movimiento `sale` (qty negativo) por insumo + descuento de stock.
+    for (const [ingredientId, qty] of consumed) {
+      if (qty.isZero()) {
+        continue;
+      }
+      const ingredient = await tx.ingredient.findFirst({
+        where: { id: ingredientId },
+        select: { stock: true },
+      });
+      if (!ingredient) {
+        continue;
+      }
+      await tx.inventoryMovement.create({
+        data: {
+          tenantId,
+          ingredientId,
+          type: 'sale',
+          qty: qty.negated(),
+          note: `Venta ${saleId}`,
+          userId: null,
+        },
+      });
+      // Stock puede quedar negativo a propósito (la venta no se bloquea).
+      await tx.ingredient.update({
+        where: { id: ingredientId },
+        data: { stock: ingredient.stock.sub(qty) },
+      });
+    }
   }
 
   // --- HU-04-08 · agregación del cierre Z ---
