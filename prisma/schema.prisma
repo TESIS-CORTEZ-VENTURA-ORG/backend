@@ -32,10 +32,49 @@ model Tenant {
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
 
-  users       User[]
-  ingredients Ingredient[]
+  users          User[]
+  ingredients    Ingredient[]
+  unitsOfMeasure UnitOfMeasure[]
+  categories     Category[]
 
   @@map("tenants")
+}
+
+// HU-02-03: unidades de medida con factor de conversión a la base de su familia.
+model UnitOfMeasure {
+  id           String    @id @default(uuid()) @db.Uuid
+  tenantId     String    @map("tenant_id") @db.Uuid
+  code         String
+  name         String
+  family       String // mass | volume | count
+  factorToBase Decimal   @default(1) @db.Decimal(18, 6) @map("factor_to_base")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  deletedAt    DateTime? @map("deleted_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+  @@map("units_of_measure")
+}
+
+// HU-02-04: categorías jerárquicas (árbol). Sin ciclos; sin borrar con hijas.
+model Category {
+  id        String    @id @default(uuid()) @db.Uuid
+  tenantId  String    @map("tenant_id") @db.Uuid
+  name      String
+  parentId  String?   @map("parent_id") @db.Uuid
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  tenant   Tenant     @relation(fields: [tenantId], references: [id])
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children Category[] @relation("CategoryTree")
+
+  @@index([tenantId])
+  @@map("categories")
 }
 
 // E02 — Catálogo. HU-02-01: insumos (productos base). SKU único por tenant,
