@@ -10,3 +10,10 @@ export const authTokensSchema = z.object({
 });
 
 export type AuthTokens = z.infer<typeof authTokensSchema>;
+
+/** Body de /auth/refresh y /auth/logout (HU-01-03, HU-01-08). */
+export const refreshSchema = z.object({
+  refreshToken: z.string().min(1),
+});
+
+export type RefreshInput = z.infer<typeof refreshSchema>;

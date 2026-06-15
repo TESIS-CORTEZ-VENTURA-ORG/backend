@@ -10,6 +10,9 @@ export default defineConfig({
     root: './',
     include: ['test/**/*.e2e-spec.ts'],
     env: loadEnv('test', process.cwd(), ''),
+    // Los e2e comparten una sola DB y hacen TRUNCATE → ejecutarlos en serie
+    // (sin paralelismo entre archivos) para evitar carreras.
+    fileParallelism: false,
   },
   plugins: [swc.vite()],
 });

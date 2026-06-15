@@ -5,6 +5,7 @@ import { AuthController } from './auth.controller';
 import { AuthDbClient } from './auth-db.client';
 import { AuthService } from './auth.service';
 import { PasswordService } from './password.service';
+import { RefreshTokenService } from './refresh-token.service';
 import { TokenService } from './token.service';
 
 /** Lee una clave PEM en base64 desde el entorno (generadas con `bun run keys:gen`). */
@@ -27,7 +28,13 @@ function readKey(name: string): string {
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, AuthDbClient, PasswordService, TokenService],
+  providers: [
+    AuthService,
+    AuthDbClient,
+    PasswordService,
+    TokenService,
+    RefreshTokenService,
+  ],
   exports: [TokenService], // para que JwtAuthGuard resuelva en otros módulos
 })
 export class AuthModule {}
