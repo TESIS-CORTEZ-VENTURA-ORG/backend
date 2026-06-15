@@ -12,3 +12,4 @@ export * from './catalog/ingredient';
 export * from './catalog/unit';
 export * from './catalog/category';
 export * from './catalog/supplier';
+export * from './catalog/recipe';

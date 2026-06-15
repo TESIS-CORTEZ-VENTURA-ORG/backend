@@ -37,8 +37,64 @@ model Tenant {
   unitsOfMeasure UnitOfMeasure[]
   categories     Category[]
   suppliers      Supplier[]
+  recipes        Recipe[]
 
   @@map("tenants")
+}
+
+// HU-02-07/08/09: receta estandarizada (BOM). kind dish|sub_recipe; yield (rendimiento).
+model Recipe {
+  id        String    @id @default(uuid()) @db.Uuid
+  tenantId  String    @map("tenant_id") @db.Uuid
+  name      String
+  kind      String    @default("dish")
+  yield     Decimal   @default(1) @db.Decimal(12, 3)
+  version   Int       @default(1)
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  tenant   Tenant          @relation(fields: [tenantId], references: [id])
+  items    RecipeItem[]    @relation("RecipeItems")
+  usedIn   RecipeItem[]    @relation("SubRecipe")
+  versions RecipeVersion[]
+
+  @@index([tenantId])
+  @@map("recipes")
+}
+
+// Línea de BOM: referencia un ingrediente O una sub-receta (XOR), con qty y merma.
+model RecipeItem {
+  id           String  @id @default(uuid()) @db.Uuid
+  tenantId     String  @map("tenant_id") @db.Uuid
+  recipeId     String  @map("recipe_id") @db.Uuid
+  ingredientId String? @map("ingredient_id") @db.Uuid
+  subRecipeId  String? @map("sub_recipe_id") @db.Uuid
+  qty          Decimal @db.Decimal(12, 3)
+  wasteFactor  Decimal @default(0) @db.Decimal(5, 4) @map("waste_factor")
+
+  recipe     Recipe      @relation("RecipeItems", fields: [recipeId], references: [id], onDelete: Cascade)
+  ingredient Ingredient? @relation(fields: [ingredientId], references: [id])
+  subRecipe  Recipe?     @relation("SubRecipe", fields: [subRecipeId], references: [id])
+
+  @@index([recipeId])
+  @@index([tenantId])
+  @@map("recipe_items")
+}
+
+// HU-02-09: snapshot inmutable de una versión de la receta (con costo del momento).
+model RecipeVersion {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  recipeId  String   @map("recipe_id") @db.Uuid
+  version   Int
+  snapshot  Json
+  createdAt DateTime @default(now()) @map("created_at")
+
+  recipe Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  @@index([recipeId])
+  @@map("recipe_versions")
 }
 
 // HU-02-05: proveedores (RUC 11 díg., contacto, lead time). Soft delete / desactivar.
@@ -140,6 +196,7 @@ model Ingredient {
 
   tenant           Tenant            @relation(fields: [tenantId], references: [id])
   productSuppliers ProductSupplier[]
+  recipeItems      RecipeItem[]
 
   @@unique([tenantId, sku])
   @@index([tenantId])

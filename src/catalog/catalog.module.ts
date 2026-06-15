@@ -8,6 +8,8 @@ import { IngredientsController } from './ingredients.controller';
 import { IngredientsService } from './ingredients.service';
 import { ProductSuppliersController } from './product-suppliers.controller';
 import { ProductSuppliersService } from './product-suppliers.service';
+import { RecipesController } from './recipes.controller';
+import { RecipesService } from './recipes.service';
 import { SuppliersController } from './suppliers.controller';
 import { SuppliersService } from './suppliers.service';
 import { UnitsController } from './units.controller';
@@ -22,6 +24,7 @@ import { UnitsService } from './units.service';
     CategoriesController,
     SuppliersController,
     ProductSuppliersController,
+    RecipesController,
   ],
   providers: [
     IngredientsService,
@@ -29,6 +32,7 @@ import { UnitsService } from './units.service';
     CategoriesService,
     SuppliersService,
     ProductSuppliersService,
+    RecipesService,
   ],
 })
 export class CatalogModule {}
