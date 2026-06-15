@@ -29,10 +29,22 @@ describe('RLS multi-tenant — 4 vectores (e2e)', () => {
     tenantA = a.id;
     tenantB = b.id;
     await admin.user.create({
-      data: { tenantId: tenantA, email: 'a@motif.pe', name: 'User A' },
+      data: {
+        tenantId: tenantA,
+        email: 'a@motif.pe',
+        name: 'User A',
+        passwordHash: 'x',
+        roles: ['owner'],
+      },
     });
     await admin.user.create({
-      data: { tenantId: tenantB, email: 'b@resto.pe', name: 'User B' },
+      data: {
+        tenantId: tenantB,
+        email: 'b@resto.pe',
+        name: 'User B',
+        passwordHash: 'x',
+        roles: ['owner'],
+      },
     });
   });
 
@@ -52,7 +64,13 @@ describe('RLS multi-tenant — 4 vectores (e2e)', () => {
     await expect(
       app.runInTenant(tenantA, (tx) =>
         tx.user.create({
-          data: { tenantId: tenantB, email: 'evil@a.pe', name: 'Evil' },
+          data: {
+            tenantId: tenantB,
+            email: 'evil@a.pe',
+            name: 'Evil',
+            passwordHash: 'x',
+            roles: ['staff'],
+          },
         }),
       ),
     ).rejects.toThrow();
