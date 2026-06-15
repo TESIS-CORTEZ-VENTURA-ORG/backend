@@ -42,8 +42,51 @@ model Tenant {
   menuItems      MenuItem[]
   menuModifiers  MenuModifier[]
   menuAvailability MenuAvailability[]
+  zones          Zone[]
+  diningTables   DiningTable[]
 
   @@map("tenants")
+}
+
+// HU-03-01: zona del salón (terraza, salón, barra…). position = orden visual.
+model Zone {
+  id        String    @id @default(uuid()) @db.Uuid
+  tenantId  String    @map("tenant_id") @db.Uuid
+  name      String
+  position  Int       @default(0)
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  tenant Tenant        @relation(fields: [tenantId], references: [id])
+  tables DiningTable[]
+
+  @@index([tenantId])
+  @@map("zones")
+}
+
+// HU-03-01/02/03: mesa del salón. code único por tenant; status del mapa POS.
+// status: free | occupied | bill_requested | cleaning.
+model DiningTable {
+  id        String    @id @default(uuid()) @db.Uuid
+  tenantId  String    @map("tenant_id") @db.Uuid
+  zoneId    String    @map("zone_id") @db.Uuid
+  code      String
+  capacity  Int       @default(2)
+  status    String    @default("free")
+  posX      Int?      @map("pos_x")
+  posY      Int?      @map("pos_y")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  zone   Zone   @relation(fields: [zoneId], references: [id])
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+  @@index([zoneId])
+  @@map("dining_tables")
 }
 
 // HU-02-07/08/09: receta estandarizada (BOM). kind dish|sub_recipe; yield (rendimiento).

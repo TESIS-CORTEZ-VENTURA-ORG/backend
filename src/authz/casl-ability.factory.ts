@@ -17,6 +17,9 @@ export type AppSubject =
   | 'Inventory'
   | 'Sale'
   | 'Order'
+  | 'Zone'
+  | 'Table'
+  | 'Kitchen'
   | 'all';
 export type AppAbility = MongoAbility<[AppAction, AppSubject]>;
 
@@ -46,13 +49,30 @@ export class CaslAbilityFactory {
         'Sale',
         'Order',
         'Report',
+        'Zone', // configurar salón (zonas/mesas)
+        'Table',
+        'Kitchen',
       ]);
       cannot(['create', 'update', 'delete'], 'User'); // gestión de usuarios = owner
       cannot(['create', 'update', 'delete'], 'Setting'); // sin escritura en settings
     }
 
     if (roles.includes('staff')) {
-      can('read', ['Catalog', 'Recipe', 'Inventory', 'Sale', 'Order']); // POS/KDS
+      can('read', [
+        'Catalog',
+        'Recipe',
+        'Inventory',
+        'Sale',
+        'Order',
+        'Zone',
+        'Table',
+        'Kitchen',
+      ]);
+      // Operación de POS/KDS: el mesero toma órdenes y opera mesas; el cocinero
+      // marca ítems. NO configura el salón (crear/borrar zonas/mesas = manager).
+      can(['create', 'update'], 'Order'); // tomar orden, enviar a cocina, anular
+      can('update', 'Table'); // abrir mesa, cambiar estado, solicitar cuenta
+      can('update', 'Kitchen'); // marcar ítem preparando/listo/servido
     }
 
     return build();

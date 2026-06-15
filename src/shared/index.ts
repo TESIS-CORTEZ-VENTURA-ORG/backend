@@ -14,3 +14,4 @@ export * from './catalog/category';
 export * from './catalog/supplier';
 export * from './catalog/recipe';
 export * from './catalog/menu';
+export * from './pos/salon';

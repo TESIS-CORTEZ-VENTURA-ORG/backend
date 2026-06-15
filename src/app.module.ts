@@ -3,6 +3,7 @@ import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
 import { CatalogModule } from './catalog/catalog.module';
 import { PlatformModule } from './platform/platform.module';
+import { PosModule } from './pos/pos.module';
 import { TenantsModule } from './tenants/tenants.module';
 import { UsersModule } from './users/users.module';
 
@@ -15,6 +16,7 @@ import { UsersModule } from './users/users.module';
     TenantsModule,
     AuditModule,
     CatalogModule,
+    PosModule,
   ],
 })
 export class AppModule {}
