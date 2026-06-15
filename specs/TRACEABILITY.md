@@ -58,15 +58,15 @@
 | HU-03-03 | Abrir mesa | 🟢 Hecho | `HU-03-03-04-05-10-11-12-orders` | #22 |
 | HU-03-04 | Tomar orden | 🟢 Hecho | `HU-03-03-04-05-10-11-12-orders` | #22 |
 | HU-03-05 | Aplicar modificadores | 🟢 Hecho | `HU-03-03-04-05-10-11-12-orders` | #22 |
-| HU-03-06 | Enviar comanda a cocina | 🔲 Pendiente (Inc C) | — | — |
-| HU-03-07 | Vista KDS por estación | 🔲 Pendiente (Inc C) | — | — |
-| HU-03-08 | Marcar ítem en preparación | 🔲 Pendiente (Inc C) | — | — |
-| HU-03-09 | Marcar ítem listo | 🔲 Pendiente (Inc C) | — | — |
+| HU-03-06 | Enviar comanda a cocina | 🟢 Hecho | `HU-03-06-09-kitchen` | #23 |
+| HU-03-07 | Vista KDS por estación | 🟢 Hecho | `HU-03-06-09-kitchen` | #23 |
+| HU-03-08 | Marcar ítem en preparación | 🟢 Hecho | `HU-03-06-09-kitchen` | #23 |
+| HU-03-09 | Marcar ítem listo | 🟢 Hecho | `HU-03-06-09-kitchen` | #23 |
 | HU-03-10 | Marcar ítem servido | 🟢 Hecho | `HU-03-03-04-05-10-11-12-orders` | #22 |
 | HU-03-11 | Anular orden con razón | 🟢 Hecho | `HU-03-03-04-05-10-11-12-orders` | #22 |
 | HU-03-12 | Solicitar cuenta | 🟢 Hecho (vía `PATCH /api/tables {status:'bill'}`) | `HU-03-03-04-05-10-11-12-orders` | #22 |
 
-**E03: 8/12** (Inc A — salón: 2 · Inc B — órdenes: 6). Pendiente: **Inc C** (cocina/KDS: HU-03-06/07/08/09). Real-time por polling (push SSE = mejora). HU-03-12 "solicitar cuenta" no añade endpoint: reutiliza `PATCH /api/tables/:id { status:'bill' }`. Nota: el frontend NO tiene pantalla KDS aún (se construirá).
+**E03: 12/12 backend** (Inc A — salón: 2 · Inc B — órdenes: 6 · Inc C — cocina/KDS: 4). Real-time por **polling** (push SSE = mejora; no requiere servicio externo). HU-03-12 "solicitar cuenta" no añade endpoint: reutiliza `PATCH /api/tables/:id { status:'bill' }`. Inc C añade `kitchen_stations` (RLS FORCE), `menu_categories.kitchen_station_id`, `POST /api/orders/:id/send-to-kitchen`, `/api/kitchen/stations` + `/api/kitchen/queue` + `PATCH /api/kitchen/items/:itemId`, y el read-model de mesas (`GET /api/tables/:id` + campos `currentOrderId/openedAt/guests/waiterId` en el listado). Nota: el frontend aún NO tiene **pantalla KDS** (se construirá; el backend ya la habilita).
 
 ## E12 — Plataforma (lo tocado)
 | HU | Título | Estado | Spec | PR |
