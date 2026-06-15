@@ -6,13 +6,29 @@ import { CategoriesController } from './categories.controller';
 import { CategoriesService } from './categories.service';
 import { IngredientsController } from './ingredients.controller';
 import { IngredientsService } from './ingredients.service';
+import { ProductSuppliersController } from './product-suppliers.controller';
+import { ProductSuppliersService } from './product-suppliers.service';
+import { SuppliersController } from './suppliers.controller';
+import { SuppliersService } from './suppliers.service';
 import { UnitsController } from './units.controller';
 import { UnitsService } from './units.service';
 
-/** E02 — Catálogo: insumos, unidades de medida y categorías (recetas/menú en HUs siguientes). */
+/** E02 — Catálogo: insumos, unidades, categorías, proveedores y producto-proveedor. */
 @Module({
   imports: [PlatformModule, AuthModule, AuthzModule],
-  controllers: [IngredientsController, UnitsController, CategoriesController],
-  providers: [IngredientsService, UnitsService, CategoriesService],
+  controllers: [
+    IngredientsController,
+    UnitsController,
+    CategoriesController,
+    SuppliersController,
+    ProductSuppliersController,
+  ],
+  providers: [
+    IngredientsService,
+    UnitsService,
+    CategoriesService,
+    SuppliersService,
+    ProductSuppliersService,
+  ],
 })
 export class CatalogModule {}

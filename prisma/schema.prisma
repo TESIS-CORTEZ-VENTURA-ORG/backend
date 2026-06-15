@@ -36,8 +36,53 @@ model Tenant {
   ingredients    Ingredient[]
   unitsOfMeasure UnitOfMeasure[]
   categories     Category[]
+  suppliers      Supplier[]
 
   @@map("tenants")
+}
+
+// HU-02-05: proveedores (RUC 11 díg., contacto, lead time). Soft delete / desactivar.
+model Supplier {
+  id           String    @id @default(uuid()) @db.Uuid
+  tenantId     String    @map("tenant_id") @db.Uuid
+  ruc          String
+  name         String
+  contactName  String?   @map("contact_name")
+  contactEmail String?   @map("contact_email")
+  contactPhone String?   @map("contact_phone")
+  paymentTerms String?   @map("payment_terms")
+  leadTimeDays Int?      @map("lead_time_days")
+  active       Boolean   @default(true)
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  deletedAt    DateTime? @map("deleted_at")
+
+  tenant           Tenant            @relation(fields: [tenantId], references: [id])
+  productSuppliers ProductSupplier[]
+
+  @@unique([tenantId, ruc])
+  @@index([tenantId])
+  @@map("suppliers")
+}
+
+// HU-02-06: relación insumo ↔ proveedor (SKU del proveedor, último precio, preferido).
+model ProductSupplier {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
+  ingredientId String   @map("ingredient_id") @db.Uuid
+  supplierId   String   @map("supplier_id") @db.Uuid
+  supplierSku  String?  @map("supplier_sku")
+  lastPrice    Decimal? @db.Decimal(12, 2) @map("last_price")
+  preferred    Boolean  @default(false)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  ingredient Ingredient @relation(fields: [ingredientId], references: [id])
+  supplier   Supplier   @relation(fields: [supplierId], references: [id])
+
+  @@unique([ingredientId, supplierId])
+  @@index([tenantId])
+  @@map("product_suppliers")
 }
 
 // HU-02-03: unidades de medida con factor de conversión a la base de su familia.
@@ -93,7 +138,8 @@ model Ingredient {
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
 
-  tenant Tenant @relation(fields: [tenantId], references: [id])
+  tenant           Tenant            @relation(fields: [tenantId], references: [id])
+  productSuppliers ProductSupplier[]
 
   @@unique([tenantId, sku])
   @@index([tenantId])
