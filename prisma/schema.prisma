@@ -62,6 +62,22 @@ model User {
   @@map("users")
 }
 
+// HU-01-09: audit log inmutable de acciones críticas (Ley 29733). Append-only
+// (trigger en la migración bloquea UPDATE/DELETE). RLS FORCE por tenant.
+model AuditLog {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  action    String
+  ip        String?
+  userAgent String?  @map("user_agent")
+  meta      Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([tenantId, createdAt])
+  @@map("audit_logs")
+}
+
 // HU-01-03: refresh tokens opacos con rotación. Se guarda solo el SHA-256.
 model RefreshToken {
   id        String    @id @default(uuid()) @db.Uuid

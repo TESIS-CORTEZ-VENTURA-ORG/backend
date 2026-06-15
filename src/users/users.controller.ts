@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Param, Patch, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
+import { Audited } from '../audit/audited.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PoliciesGuard } from '../authz/policies.guard';
@@ -26,6 +27,7 @@ export class UsersController {
 
   @Patch(':id/role')
   @RequireAbility('update', 'User')
+  @Audited('user.role.change')
   async assignRoles(
     @CurrentUser() claims: JwtClaims,
     @Param('id') id: string,
