@@ -6,10 +6,14 @@ import { CategoriesController } from './categories.controller';
 import { CategoriesService } from './categories.service';
 import { IngredientsController } from './ingredients.controller';
 import { IngredientsService } from './ingredients.service';
+import { MenuAvailabilityController } from './menu-availability.controller';
+import { MenuAvailabilityService } from './menu-availability.service';
 import { MenuCategoriesController } from './menu-categories.controller';
 import { MenuCategoriesService } from './menu-categories.service';
 import { MenuItemsController } from './menu-items.controller';
 import { MenuItemsService } from './menu-items.service';
+import { MenuModifiersController } from './menu-modifiers.controller';
+import { MenuModifiersService } from './menu-modifiers.service';
 import { ProductSuppliersController } from './product-suppliers.controller';
 import { ProductSuppliersService } from './product-suppliers.service';
 import { RecipesController } from './recipes.controller';
@@ -31,6 +35,8 @@ import { UnitsService } from './units.service';
     RecipesController,
     MenuCategoriesController,
     MenuItemsController,
+    MenuModifiersController,
+    MenuAvailabilityController,
   ],
   providers: [
     IngredientsService,
@@ -41,6 +47,8 @@ import { UnitsService } from './units.service';
     RecipesService,
     MenuCategoriesService,
     MenuItemsService,
+    MenuModifiersService,
+    MenuAvailabilityService,
   ],
 })
 export class CatalogModule {}

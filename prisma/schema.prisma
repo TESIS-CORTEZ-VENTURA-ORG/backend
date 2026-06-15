@@ -40,6 +40,8 @@ model Tenant {
   recipes        Recipe[]
   menuCategories MenuCategory[]
   menuItems      MenuItem[]
+  menuModifiers  MenuModifier[]
+  menuAvailability MenuAvailability[]
 
   @@map("tenants")
 }
@@ -100,13 +102,56 @@ model MenuItem {
   updatedAt      DateTime  @updatedAt @map("updated_at")
   deletedAt      DateTime? @map("deleted_at")
 
-  tenant       Tenant        @relation(fields: [tenantId], references: [id])
-  recipe       Recipe        @relation(fields: [recipeId], references: [id])
-  menuCategory MenuCategory? @relation(fields: [menuCategoryId], references: [id])
+  tenant       Tenant             @relation(fields: [tenantId], references: [id])
+  recipe       Recipe             @relation(fields: [recipeId], references: [id])
+  menuCategory MenuCategory?      @relation(fields: [menuCategoryId], references: [id])
+  modifiers    MenuModifier[]
+  availability MenuAvailability[]
 
   @@index([tenantId])
   @@index([menuCategoryId])
   @@map("menu_items")
+}
+
+// HU-02-11: modificador opcional de un plato (extra queso, sin cebolla, picante).
+// priceDelta puede ser negativo. required = debe elegirse antes de enviar a cocina (se aplica en POS, E03).
+model MenuModifier {
+  id         String    @id @default(uuid()) @db.Uuid
+  tenantId   String    @map("tenant_id") @db.Uuid
+  menuItemId String    @map("menu_item_id") @db.Uuid
+  name       String
+  priceDelta Decimal   @default(0) @db.Decimal(12, 2) @map("price_delta")
+  required   Boolean   @default(false)
+  position   Int       @default(0)
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+  deletedAt  DateTime? @map("deleted_at")
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
+  menuItem MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+
+  @@index([menuItemId])
+  @@index([tenantId])
+  @@map("menu_modifiers")
+}
+
+// HU-02-13: ventana horaria de disponibilidad de un plato (carta de almuerzo vs cena).
+// dayOfWeek 0=domingo..6=sábado; null = todos los días. Minutos desde medianoche (hora del tenant, America/Lima).
+model MenuAvailability {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  menuItemId  String   @map("menu_item_id") @db.Uuid
+  dayOfWeek   Int?     @map("day_of_week")
+  startMinute Int      @map("start_minute")
+  endMinute   Int      @map("end_minute")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
+  menuItem MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+
+  @@index([menuItemId])
+  @@index([tenantId])
+  @@map("menu_availability")
 }
 
 // Línea de BOM: referencia un ingrediente O una sub-receta (XOR), con qty y merma.
