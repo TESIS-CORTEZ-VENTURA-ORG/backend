@@ -28,5 +28,6 @@ function readKey(name: string): string {
   ],
   controllers: [AuthController],
   providers: [AuthService, AuthDbClient, PasswordService, TokenService],
+  exports: [TokenService], // para que JwtAuthGuard resuelva en otros módulos
 })
 export class AuthModule {}

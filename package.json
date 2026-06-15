@@ -22,6 +22,7 @@
     "db:roles": "for f in db/init/*.sql; do docker exec -i gastronomia-db psql -U postgres -d gastronomia_dev < \"$f\"; done"
   },
   "dependencies": {
+    "@casl/ability": "^7.0.0",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.3",
     "@nestjs/core": "^11.0.1",
