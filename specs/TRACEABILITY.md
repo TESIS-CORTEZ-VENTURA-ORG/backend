@@ -43,12 +43,12 @@
 | HU-02-08 | Sub-recetas anidadas | 🟢 Hecho | `HU-02-07-09-recipes` | #16 |
 | HU-02-09 | Versionado de recetas | 🟢 Hecho | `HU-02-07-09-recipes` | #16 |
 | HU-02-10 | Crear plato del menú (margen) | 🟢 Hecho | `HU-02-10-12-menu` | #17 |
-| HU-02-11 | Gestión de modificadores | 🔲 Pendiente | — | — |
+| HU-02-11 | Gestión de modificadores | 🟢 Hecho | `HU-02-11-13-modifiers-availability` | #18 |
 | HU-02-12 | Categorías del menú | 🟢 Hecho | `HU-02-10-12-menu` | #17 |
-| HU-02-13 | Disponibilidad por horario | 🔲 Pendiente | — | — |
+| HU-02-13 | Disponibilidad por horario | 🟢 Hecho | `HU-02-11-13-modifiers-availability` | #18 |
 | HU-02-14 | Foto del plato | 🔲 Diferido (storage R2) | — | — |
 
-**E02: 11/14 al cierre de esta tanda** (Inc A–D). Pendientes: modificadores (11) + disponibilidad (13, Inc E), Excel (02, Inc F). Diferido: foto (14, requiere object storage).
+**E02: 13/14 al cierre de esta tanda** (Inc A–E). Pendiente: Excel (HU-02-02, Inc F — vía parser, sin servicio externo). Diferido: foto (HU-02-14, requiere object storage R2).
 
 ## E12 — Plataforma (lo tocado)
 | HU | Título | Estado | Spec | PR |
