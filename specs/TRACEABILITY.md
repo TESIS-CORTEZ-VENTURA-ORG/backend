@@ -1,7 +1,7 @@
 # Trazabilidad Backlog ↔ Implementación — Backend GastronomIA
 
 > Mapea las HU de `Product Backlog.md` (fuente de verdad) con specs, PRs y tests.
-> Evidencia de trazabilidad (ABET SO7). Actualizado: 2026-06-15 (E05 Inc 1).
+> Evidencia de trazabilidad (ABET SO7). Actualizado: 2026-06-15 (E05 Inc 2 — órdenes de compra).
 
 ## Decisiones de reconciliación
 1. **Roles = 3** (`owner`/`manager`/`staff`), no los 5 del backlog original. HU-01-04 actualizado.
@@ -74,16 +74,16 @@
 | HU-05-01 | Ver stock actual (kardex) | 🟢 Hecho | `HU-05-01-stock-movimientos-mermas` | #24 |
 | HU-05-02 | Registrar entrada manual de stock | 🟢 Hecho | `HU-05-01-stock-movimientos-mermas` | #24 |
 | HU-05-03 | Registrar salida manual | 🟢 Hecho | `HU-05-01-stock-movimientos-mermas` | #24 |
-| HU-05-04 | Crear orden de compra | 🔲 Pendiente (Inc 2) | — | — |
-| HU-05-05 | Enviar OC al proveedor | 🔲 Diferido (correo) | — | — |
-| HU-05-06 | Recepcionar OC (parcial/total) | 🔲 Pendiente (Inc 2) | — | — |
-| HU-05-07 | Cancelar OC | 🔲 Pendiente (Inc 2) | — | — |
+| HU-05-04 | Crear orden de compra | 🟢 Hecho | `HU-05-04-06-07-purchase-orders` | #25 |
+| HU-05-05 | Enviar OC al proveedor | 🟡 Parcial (solo estado; email diferido) | `HU-05-04-06-07-purchase-orders` | #25 |
+| HU-05-06 | Recepcionar OC (parcial/total) | 🟢 Hecho | `HU-05-04-06-07-purchase-orders` | #25 |
+| HU-05-07 | Cancelar OC | 🟢 Hecho | `HU-05-04-06-07-purchase-orders` | #25 |
 | HU-05-08 | Registrar merma con razón | 🟢 Hecho | `HU-05-01-stock-movimientos-mermas` | #24 |
 | HU-05-09 | Ver histórico de mermas | 🟢 Hecho | `HU-05-01-stock-movimientos-mermas` | #24 |
 | HU-05-10 | Alertas de stock bajo | 🟢 Hecho | `HU-05-01-stock-movimientos-mermas` | #24 |
 | HU-05-11 | Detectar anomalías de mermas con IA | 🔲 Diferido (IA/E08) | — | — |
 
-**E05: 6/11 backend (Incremento 1)** — stock/kardex, movimientos (entrada/salida), mermas con razón, histórico de mermas y alertas de stock bajo. **Inc 2** (siguiente): órdenes de compra HU-05-04/06/07 (HU-05-05 envío al proveedor = **correo**, diferido). **HU-05-11** anomalías de merma = **servicio de IA (E08)**, diferido. Modelo nuevo `inventory_movements` (RLS FORCE, kardex event-sourced con delta firmado); `ingredients` gana `stock`/`minStock` `Decimal(12,3)` (diferidos en E02, ahora gobernados por E05). Endpoints: `GET /api/inventory/stock`, `GET /api/inventory/movements`, `POST /api/inventory/movements`, `PATCH /api/inventory/levels/:ingredientId`, `GET /api/inventory/alerts`, `GET /api/inventory/waste`. Contrato alineado con el mock BFF del frontend (`MovementType`, `qty` firmado sumado al stock).
+**E05: 9/11 backend** (Inc 1 = 6 · Inc 2 = 3) + HU-05-05 status-only. **Inc 1** (#24): stock/kardex, movimientos (entrada/salida), mermas con razón, histórico de mermas y alertas de stock bajo (`inventory_movements`, RLS FORCE, kardex event-sourced con delta firmado; `ingredients` gana `stock`/`minStock` `Decimal(12,3)`). **Inc 2** (#25): órdenes de compra — `purchase_orders` + `purchase_order_items` (RLS FORCE ambas, FK PO `ON DELETE CASCADE`), `PurchaseOrders{Controller,Service}` en el módulo `inventory`. HU-05-04 crear (`draft`, `total = Σ qtyOrdered·unitCost`); HU-05-06 recepcionar parcial/total → crea movimiento `purchase` + sube `stock` + fija `unitCost` (last purchase price), estado `partially_received`/`received` (reutiliza la lógica de movimiento de Inc 1, misma transacción `runInTenant`); HU-05-07 cancelar (`{draft,sent}→cancelled`, 409 si ya recibió). **HU-05-05** = solo transición `draft→sent`; el **email/PDF al proveedor está diferido** (servicio de correo externo, como E01). **HU-05-11** anomalías de merma = **servicio de IA (E08)**, diferido. Endpoints Inc 2: `POST/GET /api/purchase-orders`, `GET /api/purchase-orders/:id`, `POST /api/purchase-orders/:id/{send,receive,cancel}`.
 
 ## E12 — Plataforma (lo tocado)
 | HU | Título | Estado | Spec | PR |
