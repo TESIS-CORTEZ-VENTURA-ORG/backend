@@ -508,6 +508,8 @@ AND el sistema usa la zona horaria del tenant
 
 #### HU-02-14 · Foto del plato
 
+> 🔲 **DIFERIDO (2026-06-15):** requiere **object storage** (Cloudflare R2) para subir/redimensionar/servir la imagen vía CDN. La columna `menu_items.image_url` ya existe (PR #17); se retoma al integrar R2. Estado en `specs/TRACEABILITY.md`.
+
 **Prioridad:** Should · **SP:** 2 · **Sprint:** S3 · **Dependencias:** HU-02-10 · **iE_ID:** iE3.1
 
 Como **Gerente**, quiero **subir foto de cada plato del menu**, para **mejorar la experiencia visual en POS y carta del cliente**.

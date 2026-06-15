@@ -34,7 +34,7 @@
 | HU | Título | Estado | Spec | PR |
 |---|---|---|---|---|
 | HU-02-01 | CRUD de insumos | 🟢 Hecho | `HU-02-01-ingredients` | #13 |
-| HU-02-02 | Carga masiva de insumos vía Excel | 🟡 Pendiente (parser) | — | — |
+| HU-02-02 | Carga masiva de insumos vía Excel/CSV | 🟢 Hecho | `HU-02-02-import` | #19 |
 | HU-02-03 | Unidades de medida con conversión | 🟢 Hecho | `HU-02-03-04-units-categories` | #14 |
 | HU-02-04 | Categorías jerárquicas | 🟢 Hecho | `HU-02-03-04-units-categories` | #14 |
 | HU-02-05 | CRUD de proveedores | 🟢 Hecho | `HU-02-05-06-suppliers` | #15 |
@@ -48,7 +48,7 @@
 | HU-02-13 | Disponibilidad por horario | 🟢 Hecho | `HU-02-11-13-modifiers-availability` | #18 |
 | HU-02-14 | Foto del plato | 🔲 Diferido (storage R2) | — | — |
 
-**E02: 13/14 al cierre de esta tanda** (Inc A–E). Pendiente: Excel (HU-02-02, Inc F — vía parser, sin servicio externo). Diferido: foto (HU-02-14, requiere object storage R2).
+**E02: 13/14 hechas** (Inc A–F). Única diferida: **HU-02-14** foto del plato (requiere object storage R2 — servicio externo). Todo lo construible vía código está completo.
 
 ## E12 — Plataforma (lo tocado)
 | HU | Título | Estado | Spec | PR |
