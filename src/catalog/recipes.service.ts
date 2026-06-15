@@ -96,6 +96,84 @@ export class RecipesService {
       : total.div(recipe.yield);
   }
 
+  /**
+   * Explota el BOM de una receta a CANTIDADES de insumo (no a costo). Espeja la
+   * recursión de costo (`recipeCost`/`itemCost`) pero acumula `qty` por insumo:
+   *  - línea de ingrediente → `qty·(1+wasteFactor)·multiplier` sumado al insumo.
+   *  - línea de sub-receta → recurse con
+   *    `multiplier' = multiplier·(qty·(1+wasteFactor))/sub.yield` y fusiona el mapa.
+   * Mismo manejo de ciclo/profundidad/yield que el costo (el `wasteFactor` se
+   * conserva: el consumo incluye la merma de receta). Devuelve un Map
+   * `ingredientId → qty` (Prisma.Decimal). Pensado para el auto-consumo de stock
+   * al vender (E05): el consumo de UN plato vendido = `explode(recipe, 1/yield)`.
+   */
+  async explodeIngredientsTx(
+    tx: Tx,
+    recipeId: string,
+    multiplier: Prisma.Decimal | number = 1,
+  ): Promise<Map<string, Prisma.Decimal>> {
+    const acc = new Map<string, Prisma.Decimal>();
+    await this.explodeInto(
+      tx,
+      recipeId,
+      new Prisma.Decimal(multiplier),
+      new Set<string>(),
+      0,
+      acc,
+    );
+    return acc;
+  }
+
+  // Recursión interna de la explosión del BOM (acumula en `acc`). Mantiene la
+  // misma aritmética de `effQty`/`yield` y los mismos guardas de ciclo/profundidad
+  // que `recipeCost`/`itemCost`.
+  private async explodeInto(
+    tx: Tx,
+    recipeId: string,
+    multiplier: Prisma.Decimal,
+    visiting: Set<string>,
+    depth: number,
+    acc: Map<string, Prisma.Decimal>,
+  ): Promise<void> {
+    if (depth > MAX_DEPTH) {
+      throw new BadRequestException(
+        `Profundidad máxima de sub-recetas (${MAX_DEPTH}) excedida`,
+      );
+    }
+    if (visiting.has(recipeId)) {
+      throw new BadRequestException('Ciclo de sub-recetas detectado');
+    }
+    visiting.add(recipeId);
+    const items = await tx.recipeItem.findMany({
+      where: { recipeId },
+      include: { ingredient: true },
+    });
+    for (const item of items) {
+      const effQty = item.qty
+        .mul(new Prisma.Decimal(1).add(item.wasteFactor))
+        .mul(multiplier);
+      if (item.ingredientId) {
+        const prev = acc.get(item.ingredientId) ?? new Prisma.Decimal(0);
+        acc.set(item.ingredientId, prev.add(effQty));
+      } else if (item.subRecipeId) {
+        const sub = await tx.recipe.findFirst({
+          where: { id: item.subRecipeId },
+        });
+        if (sub && !sub.yield.isZero()) {
+          await this.explodeInto(
+            tx,
+            item.subRecipeId,
+            effQty.div(sub.yield),
+            visiting,
+            depth + 1,
+            acc,
+          );
+        }
+      }
+    }
+    visiting.delete(recipeId);
+  }
+
   async create(tenantId: string, dto: CreateRecipeInput): Promise<RecipeView> {
     return this.prisma.runInTenant(tenantId, async (tx) => {
       await this.validateRefs(tx, dto.items);
