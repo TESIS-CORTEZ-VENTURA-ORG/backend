@@ -42,13 +42,13 @@
 | HU-02-07 | Crear receta estandarizada (BOM) | 🟢 Hecho | `HU-02-07-09-recipes` | #16 |
 | HU-02-08 | Sub-recetas anidadas | 🟢 Hecho | `HU-02-07-09-recipes` | #16 |
 | HU-02-09 | Versionado de recetas | 🟢 Hecho | `HU-02-07-09-recipes` | #16 |
-| HU-02-10 | Crear plato del menú | 🔲 Pendiente | — | — |
+| HU-02-10 | Crear plato del menú (margen) | 🟢 Hecho | `HU-02-10-12-menu` | #17 |
 | HU-02-11 | Gestión de modificadores | 🔲 Pendiente | — | — |
-| HU-02-12 | Categorías del menú | 🔲 Pendiente | — | — |
+| HU-02-12 | Categorías del menú | 🟢 Hecho | `HU-02-10-12-menu` | #17 |
 | HU-02-13 | Disponibilidad por horario | 🔲 Pendiente | — | — |
 | HU-02-14 | Foto del plato | 🔲 Diferido (storage R2) | — | — |
 
-**E02: 9/14 al cierre de esta tanda** (Inc A–C). Pendientes: menú (10–13, Inc D), Excel (02, Inc E). Diferido: foto (14, requiere object storage).
+**E02: 11/14 al cierre de esta tanda** (Inc A–D). Pendientes: modificadores (11) + disponibilidad (13, Inc E), Excel (02, Inc F). Diferido: foto (14, requiere object storage).
 
 ## E12 — Plataforma (lo tocado)
 | HU | Título | Estado | Spec | PR |
