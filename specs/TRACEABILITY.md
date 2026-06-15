@@ -1,7 +1,7 @@
 # Trazabilidad Backlog ↔ Implementación — Backend GastronomIA
 
 > Mapea las HU de `Product Backlog.md` (fuente de verdad) con specs, PRs y tests.
-> Evidencia de trazabilidad (ABET SO7). Actualizado: 2026-06-15 (E05 Inc 2 — órdenes de compra).
+> Evidencia de trazabilidad (ABET SO7). Actualizado: 2026-06-15 (E04 Inc 1 — cobros, tickets y pagos).
 
 ## Decisiones de reconciliación
 1. **Roles = 3** (`owner`/`manager`/`staff`), no los 5 del backlog original. HU-01-04 actualizado.
@@ -67,6 +67,20 @@
 | HU-03-12 | Solicitar cuenta | 🟢 Hecho (vía `PATCH /api/tables {status:'bill'}`) | `HU-03-03-04-05-10-11-12-orders` | #22 |
 
 **E03: 12/12 backend** (Inc A — salón: 2 · Inc B — órdenes: 6 · Inc C — cocina/KDS: 4). Real-time por **polling** (push SSE = mejora; no requiere servicio externo). HU-03-12 "solicitar cuenta" no añade endpoint: reutiliza `PATCH /api/tables/:id { status:'bill' }`. Inc C añade `kitchen_stations` (RLS FORCE), `menu_categories.kitchen_station_id`, `POST /api/orders/:id/send-to-kitchen`, `/api/kitchen/stations` + `/api/kitchen/queue` + `PATCH /api/kitchen/items/:itemId`, y el read-model de mesas (`GET /api/tables/:id` + campos `currentOrderId/openedAt/guests/waiterId` en el listado). Nota: el frontend aún NO tiene **pantalla KDS** (se construirá; el backend ya la habilita).
+
+## E04 — Tickets, Cobros y Pagos (8 HU)
+| HU | Título | Estado | Spec | PR |
+|---|---|---|---|---|
+| HU-04-01 | Generar pre-cuenta | 🟢 Hecho | `HU-04-01-02-04-05-06-07-billing` | #26 |
+| HU-04-02 | Generar cuenta final (ticket) | 🟢 Hecho | `HU-04-01-02-04-05-06-07-billing` | #26 |
+| HU-04-03 | División de cuenta por comensal | 🔲 Pendiente (Inc 2) | — | — |
+| HU-04-04 | Registrar pago en efectivo | 🟢 Hecho | `HU-04-01-02-04-05-06-07-billing` | #26 |
+| HU-04-05 | Registrar pago electrónico (Yape/Plin/tarjeta) | 🟢 Hecho (sin pasarela) | `HU-04-01-02-04-05-06-07-billing` | #26 |
+| HU-04-06 | Pago mixto | 🟢 Hecho | `HU-04-01-02-04-05-06-07-billing` | #26 |
+| HU-04-07 | Anular ticket | 🟢 Hecho | `HU-04-01-02-04-05-06-07-billing` | #26 |
+| HU-04-08 | Cierre Z del día | 🔲 Pendiente (Inc 2) | — | — |
+
+**E04: 6/8 backend (Inc 1)** — módulo nuevo `billing` (`Billing{Controller,Service}`). Esquema `sales` + `payments` (RLS FORCE ambas, verificado `relforcerowsecurity=t`; FK `payments→sales ON DELETE CASCADE`; `sales` con `@@unique([orderId])` = un ticket por orden y `@@unique([tenantId, serie, number])` = correlativo). **Precios INCLUYEN IGV**: `total = Σ unitPrice·qty`; `subtotal = total/(1+igvRate)` (del `tenant.igvRate`, default 0.18); `igv = total−subtotal`. Series: boleta `B001`, factura `F001`; `number = max+1` por tenant+serie. Endpoints: `GET /api/orders/:id/pre-bill` (preview, no persiste), `POST /api/orders/:id/pay` (emite ticket + N pagos + cierra orden `paid` + libera mesa `free`, una sola tx `runInTenant`; reutiliza `OrdersService.buildView` en la misma tx), `GET /api/sales` + `/api/sales/:id`, `POST /api/sales/:id/void`. `SaleView` = espejo del `Sale` del frontend (moneda como string; adaptador BFF trivial sobre `orders/[id]/pay.post.ts`). **RBAC:** el cajero es `staff` → `can('create','Sale')` (cobra); **anular** = manager/owner (`update Sale`; staff → 403). **SUNAT:** el backlog pide "schema preparado para SUNAT"; la **emisión/envío electrónico es externo y queda fuera de alcance** (solo se registra el ticket). **Diferido a Inc 2:** HU-04-03 (división por comensal) y HU-04-08 (cierre Z). **Fuera de alcance (documentado):** vuelto en efectivo y referencia de pago electrónico (no se persisten); reversar orden/stock al anular ticket.
 
 ## E05 — Inventario, Compras y Mermas (11 HU)
 | HU | Título | Estado | Spec | PR |
