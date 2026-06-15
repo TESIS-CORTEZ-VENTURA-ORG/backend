@@ -35,3 +35,26 @@ export const voidSaleSchema = z.object({
   reason: z.string().min(1),
 });
 export type VoidSaleInput = z.infer<typeof voidSaleSchema>;
+
+// HU-04-03 · División de cuenta por comensal (cómputo, no persiste). Dos modos:
+//  - equal: dividir el total en `parts` partes (default = order.guests si ≥ 2).
+//  - items: agrupar los ítems en `assignments` (cada ítem asignado una sola vez).
+export const splitOrderSchema = z
+  .object({
+    mode: z.enum(['equal', 'items']),
+    parts: z.number().int().min(2).optional(),
+    assignments: z
+      .array(
+        z.object({
+          label: z.string().min(1),
+          itemIds: z.array(z.uuid()).min(1),
+        }),
+      )
+      .min(1)
+      .optional(),
+  })
+  .refine((v) => v.mode !== 'items' || v.assignments !== undefined, {
+    message: 'El modo "items" requiere assignments',
+    path: ['assignments'],
+  });
+export type SplitOrderInput = z.infer<typeof splitOrderSchema>;

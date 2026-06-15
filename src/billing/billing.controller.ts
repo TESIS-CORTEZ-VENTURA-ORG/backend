@@ -8,17 +8,22 @@ import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import {
   ok,
   payOrderSchema,
+  splitOrderSchema,
   voidSaleSchema,
   type ApiResponse,
   type JwtClaims,
   type PayOrderInput,
+  type SplitOrderInput,
   type VoidSaleInput,
 } from '../shared';
 import type { OrderView } from '../pos/orders.service';
 import {
   BillingService,
+  type CashCloseView,
+  type CashClosePreview,
   type PreBillView,
   type SaleView,
+  type SplitView,
 } from './billing.service';
 
 // E04 — Cobros. Las rutas de cobro cuelgan de la orden (orders/:id) y las de
@@ -36,6 +41,17 @@ export class BillingController {
     @Param('id') id: string,
   ): Promise<ApiResponse<PreBillView>> {
     return ok(await this.billing.preBill(claims.tenant_id, id));
+  }
+
+  // HU-04-03 · Dividir la cuenta por comensal (cómputo, no persiste).
+  @Post('orders/:id/split')
+  @RequireAbility('read', 'Sale')
+  async split(
+    @CurrentUser() claims: JwtClaims,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(splitOrderSchema)) dto: SplitOrderInput,
+  ): Promise<ApiResponse<SplitView>> {
+    return ok(await this.billing.split(claims.tenant_id, id, dto));
   }
 
   // HU-04-02/04/05/06 · Cobrar: emite el ticket + registra pagos; cierra la orden.
@@ -78,5 +94,33 @@ export class BillingController {
     @Body(new ZodValidationPipe(voidSaleSchema)) dto: VoidSaleInput,
   ): Promise<ApiResponse<SaleView>> {
     return ok(await this.billing.void(claims.tenant_id, id, dto));
+  }
+
+  // HU-04-08 · Preview del cierre Z (ventana abierta, no persiste).
+  @Get('cash-close/preview')
+  @RequireAbility('read', 'Sale')
+  async cashClosePreview(
+    @CurrentUser() claims: JwtClaims,
+  ): Promise<ApiResponse<CashClosePreview>> {
+    return ok(await this.billing.cashClosePreview(claims.tenant_id));
+  }
+
+  // HU-04-08 · Cierre Z (cierre del turno): persiste el agregado. manager/owner.
+  @Post('cash-close')
+  @RequireAbility('update', 'Sale')
+  @Audited('cash.close')
+  async cashClose(
+    @CurrentUser() claims: JwtClaims,
+  ): Promise<ApiResponse<CashCloseView>> {
+    return ok(await this.billing.cashClose(claims.tenant_id, claims.sub));
+  }
+
+  // HU-04-08 · Lista de cierres Z pasados (desc por closedAt).
+  @Get('cash-close')
+  @RequireAbility('read', 'Sale')
+  async listCashCloses(
+    @CurrentUser() claims: JwtClaims,
+  ): Promise<ApiResponse<CashCloseView[]>> {
+    return ok(await this.billing.listCashCloses(claims.tenant_id));
   }
 }

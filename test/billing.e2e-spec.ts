@@ -17,7 +17,7 @@ if (!adminUrl) {
 }
 
 const TRUNCATE =
-  'TRUNCATE TABLE "payments","sales","order_items","orders","dining_tables","zones","menu_modifiers","menu_availability","menu_items","menu_categories","recipe_versions","recipe_items","recipes","product_suppliers","suppliers","ingredients","categories","units_of_measure","audit_logs","refresh_tokens","users","tenants" CASCADE';
+  'TRUNCATE TABLE "cash_closes","payments","sales","order_items","orders","dining_tables","zones","menu_modifiers","menu_availability","menu_items","menu_categories","recipe_versions","recipe_items","recipes","product_suppliers","suppliers","ingredients","categories","units_of_measure","audit_logs","refresh_tokens","users","tenants" CASCADE';
 
 describe('Billing — cobros HU-04-01/02/04/05/06/07 (e2e)', () => {
   let app: NestFastifyApplication<App>;
