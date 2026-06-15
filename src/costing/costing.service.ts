@@ -1,9 +1,15 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../platform/prisma/prisma.service';
 import { RecipesService } from '../catalog/recipes.service';
 
 type Tx = Prisma.TransactionClient;
+type CostingCloseRow = Prisma.CostingCloseGetPayload<object>;
 
 // HU-06-01/03/04 · Costeo de un plato del menú en un período.
 //  - ingredientCost: costo directo (BOM recursivo de la receta, vía RecipesService).
@@ -48,7 +54,48 @@ export interface SuggestPriceView {
   suggestedPrice: string;
 }
 
+// HU-06-06 · Cierre de período mensual: cifras finales + snapshot del reporte.
+export interface CostingCloseView {
+  id: string;
+  period: string;
+  totalCIF: string;
+  totalUnits: number;
+  totalIngredientCost: string;
+  totalRevenue: string;
+  totalContribution: string;
+  closedAt: string;
+  userId: string | null;
+  snapshot: PeriodCostingView;
+}
+
+// HU-06-07 · Comparativo costo real (salida de inventario) vs teórico (BOM por venta).
+export interface CostVarianceView {
+  period: string;
+  theoreticalCost: string;
+  realCost: string;
+  variance: string;
+  variancePct: string;
+  byType: { waste: string; sale: string };
+  note: string;
+}
+
 const HUNDRED = new Prisma.Decimal(100);
+
+/**
+ * HU-06-07 · Aclaración de la limitación del comparativo: hoy pagar una orden NO
+ * descuenta stock automáticamente (el cobro no crea un movimiento `sale` de
+ * consumo; el enlace POS↔inventario es una integración futura, fuera de alcance).
+ * Por eso `realCost` refleja principalmente mermas + salidas manuales, no el
+ * consumo teórico de cada venta — no debe leerse como "consumo real total".
+ */
+const COST_VARIANCE_NOTE =
+  'realCost se calcula a partir de las salidas registradas en inventario ' +
+  '(type sale/waste). Hoy pagar una orden NO descuenta stock automáticamente: ' +
+  'el cobro no genera un movimiento de consumo (el enlace POS↔inventario es una ' +
+  'integración futura, fuera del alcance de esta HU). Por eso realCost refleja ' +
+  'principalmente mermas + salidas manuales y NO debe leerse como el consumo ' +
+  'real total de todas las ventas; sirve para detectar mermas no registradas o ' +
+  'porciones excesivas sobre las salidas que sí se registran.';
 
 @Injectable()
 export class CostingService {
@@ -156,6 +203,140 @@ export class CostingService {
     };
   }
 
+  /**
+   * HU-06-06 · Cierre de período mensual. Reutiliza `dishes()` (reporte de platos
+   * del período) y agrega las cifras finales:
+   *  - `totalCIF`, `totalUnits` = del reporte.
+   *  - `totalIngredientCost = Σ unitsSold·ingredientCost` (costo directo de lo vendido).
+   *  - `totalRevenue = Σ unitsSold·sellPrice`.
+   *  - `totalContribution = Σ unitsSold·contributionMargin`.
+   * Persiste un `CostingClose` con el reporte completo como `snapshot` (foto
+   * histórica inmutable) y `userId` = quién cerró. El cierre NO es recerrable:
+   * `@@unique([tenantId, period])` → segundo cierre del mismo mes lanza 409.
+   */
+  async closePeriod(
+    tenantId: string,
+    period: string,
+    userId: string | null,
+  ): Promise<CostingCloseView> {
+    const report = await this.dishes(tenantId, period);
+
+    let totalIngredientCost = NEW_ZERO();
+    let totalRevenue = NEW_ZERO();
+    let totalContribution = NEW_ZERO();
+    for (const dish of report.dishes) {
+      const units = new Prisma.Decimal(dish.unitsSold);
+      totalIngredientCost = totalIngredientCost.add(
+        units.mul(dish.ingredientCost),
+      );
+      totalRevenue = totalRevenue.add(units.mul(dish.sellPrice));
+      totalContribution = totalContribution.add(
+        units.mul(dish.contributionMargin),
+      );
+    }
+
+    return this.prisma.runInTenant(tenantId, async (tx) => {
+      const existing = await tx.costingClose.findFirst({ where: { period } });
+      if (existing) {
+        throw new ConflictException('El período ya está cerrado');
+      }
+      const row = await tx.costingClose.create({
+        data: {
+          tenantId,
+          period,
+          totalCIF: new Prisma.Decimal(report.totalCIF),
+          totalUnits: report.totalUnits,
+          totalIngredientCost,
+          totalRevenue,
+          totalContribution,
+          snapshot: report as unknown as Prisma.InputJsonValue,
+          userId,
+        },
+      });
+      return closeToView(row);
+    });
+  }
+
+  /** HU-06-06 · Lista los cierres del tenant (más reciente primero). */
+  async listCloses(tenantId: string): Promise<CostingCloseView[]> {
+    return this.prisma.runInTenant(tenantId, async (tx) => {
+      const rows = await tx.costingClose.findMany({
+        orderBy: { period: 'desc' },
+      });
+      return rows.map(closeToView);
+    });
+  }
+
+  /** HU-06-06 · Devuelve el cierre de un período; 404 si no existe. */
+  async getClose(tenantId: string, period: string): Promise<CostingCloseView> {
+    return this.prisma.runInTenant(tenantId, async (tx) => {
+      const row = await tx.costingClose.findFirst({ where: { period } });
+      if (!row) {
+        throw new NotFoundException('El período no está cerrado');
+      }
+      return closeToView(row);
+    });
+  }
+
+  /**
+   * HU-06-07 · Comparativo costo real vs teórico del período.
+   *  - `theoreticalCost = Σ unitsSold·ingredientCost` (del reporte de platos = el
+   *    costo de ingredientes que debió consumirse según el BOM por lo vendido).
+   *  - `realCost` = salida valorizada de inventario = `Σ |qty|·ingredient.unitCost`
+   *    sobre `inventory_movements` con `type ∈ {sale, waste}` y `createdAt` en el mes.
+   *  - `variance = realCost − theoreticalCost`; `variancePct = variance/teórico·100`.
+   *  - `byType` desglosa el real por tipo de movimiento.
+   * LIMITACIÓN (ver COST_VARIANCE_NOTE): pagar una orden no descuenta stock aún,
+   * por lo que `realCost` refleja mermas + salidas manuales, no el consumo de cada venta.
+   */
+  async costVariance(
+    tenantId: string,
+    period: string,
+  ): Promise<CostVarianceView> {
+    const report = await this.dishes(tenantId, period);
+    let theoretical = NEW_ZERO();
+    for (const dish of report.dishes) {
+      theoretical = theoretical.add(
+        new Prisma.Decimal(dish.unitsSold).mul(dish.ingredientCost),
+      );
+    }
+
+    const { start, end } = monthRange(period);
+    const byType = await this.prisma.runInTenant(tenantId, async (tx) => {
+      const movements = await tx.inventoryMovement.findMany({
+        where: {
+          type: { in: ['sale', 'waste'] },
+          createdAt: { gte: start, lt: end },
+        },
+        include: { ingredient: true },
+      });
+      let waste = NEW_ZERO();
+      let sale = NEW_ZERO();
+      for (const m of movements) {
+        const valued = m.qty.abs().mul(m.ingredient.unitCost);
+        if (m.type === 'waste') waste = waste.add(valued);
+        else sale = sale.add(valued);
+      }
+      return { waste, sale };
+    });
+
+    const real = byType.waste.add(byType.sale);
+    const variance = real.sub(theoretical);
+    const variancePct = theoretical.isZero()
+      ? NEW_ZERO()
+      : variance.div(theoretical).mul(HUNDRED);
+
+    return {
+      period,
+      theoreticalCost: theoretical.toFixed(2),
+      realCost: real.toFixed(2),
+      variance: variance.toFixed(2),
+      variancePct: variancePct.toFixed(2),
+      byType: { waste: byType.waste.toFixed(2), sale: byType.sale.toFixed(2) },
+      note: COST_VARIANCE_NOTE,
+    };
+  }
+
   // --- helpers ---
 
   // HU-06-02/03 · CIF total del período = Σ amount de los costos indirectos vivos.
@@ -201,6 +382,23 @@ export class CostingService {
 // crea uno por uso para no compartir referencias).
 function NEW_ZERO(): Prisma.Decimal {
   return new Prisma.Decimal(0);
+}
+
+// HU-06-06 · Mapea una fila de cierre a su vista (moneda como string; el snapshot
+// se guardó como JSON del PeriodCostingView, se devuelve tipado).
+function closeToView(row: CostingCloseRow): CostingCloseView {
+  return {
+    id: row.id,
+    period: row.period,
+    totalCIF: row.totalCIF.toFixed(2),
+    totalUnits: row.totalUnits,
+    totalIngredientCost: row.totalIngredientCost.toFixed(2),
+    totalRevenue: row.totalRevenue.toFixed(2),
+    totalContribution: row.totalContribution.toFixed(2),
+    closedAt: row.closedAt.toISOString(),
+    userId: row.userId,
+    snapshot: row.snapshot as unknown as PeriodCostingView,
+  };
 }
 
 // Rango [inicio, fin) del mes calendario `YYYY-MM` en UTC (las fechas de venta se

@@ -52,6 +52,7 @@ model Tenant {
   payments           Payment[]
   cashCloses         CashClose[]
   overheadCosts      OverheadCost[]
+  costingCloses      CostingClose[]
 
   @@map("tenants")
 }
@@ -662,4 +663,31 @@ model OverheadCost {
   @@index([tenantId])
   @@index([period])
   @@map("overhead_costs")
+}
+
+// HU-06-06 · Cierre de período mensual de costeo. Fija las cifras finales del mes
+// `YYYY-MM` y guarda el reporte de platos completo (`snapshot`, = PeriodCostingView)
+// como foto histórica inmutable para reportes/comparativos. El cierre NO es
+// editable ni recerrable: `@@unique([tenantId, period])` → un solo cierre por mes
+// (segundo intento = 409). totalCIF/totalIngredientCost/totalRevenue/
+// totalContribution = PEN. userId = quién cerró (JWT sub).
+model CostingClose {
+  id                  String   @id @default(uuid()) @db.Uuid
+  tenantId            String   @map("tenant_id") @db.Uuid
+  period              String // YYYY-MM
+  totalCIF            Decimal  @map("total_cif") @db.Decimal(12, 2)
+  totalUnits          Int      @map("total_units")
+  totalIngredientCost Decimal  @map("total_ingredient_cost") @db.Decimal(12, 2)
+  totalRevenue        Decimal  @map("total_revenue") @db.Decimal(12, 2)
+  totalContribution   Decimal  @map("total_contribution") @db.Decimal(12, 2)
+  snapshot            Json
+  closedAt            DateTime @default(now()) @map("closed_at")
+  userId              String?  @map("user_id") @db.Uuid
+  createdAt           DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, period])
+  @@index([tenantId])
+  @@map("costing_closes")
 }

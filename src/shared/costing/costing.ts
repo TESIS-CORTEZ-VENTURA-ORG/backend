@@ -50,3 +50,16 @@ export const suggestPriceQuerySchema = z.object({
   period: periodSchema,
 });
 export type SuggestPriceQueryInput = z.infer<typeof suggestPriceQuerySchema>;
+
+// HU-06-06 · Body del cierre de período mensual. El cierre fija las cifras finales
+// del mes y guarda el reporte de platos como snapshot inmutable (un cierre por mes).
+export const closePeriodSchema = z.object({
+  period: periodSchema,
+});
+export type ClosePeriodInput = z.infer<typeof closePeriodSchema>;
+
+// HU-06-07 · Query del comparativo costo real vs teórico (período obligatorio).
+export const costVarianceQuerySchema = z.object({
+  period: periodSchema,
+});
+export type CostVarianceQueryInput = z.infer<typeof costVarianceQuerySchema>;
