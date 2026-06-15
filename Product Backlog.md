@@ -127,6 +127,8 @@ _Onboarding del restaurante, autenticacion, autorizacion (RBAC), refresh tokens,
 
 **Prioridad:** Must · **SP:** 5 · **Sprint:** S1 · **Dependencias:** — · **iE_ID:** iE3.2
 
+> 🟡 **Parcial (PR #5):** tenant + owner + auto-login ✅. RUC se setea vía config (HU-01-10). **Email de bienvenida DIFERIDO** (requiere Resend).
+
 Como **Administrador**, quiero **registrar mi restaurante en la plataforma con su RUC, nombre comercial y configuracion inicial**, para **tener mi propio espacio aislado en la plataforma con datos seguros**.
 
 **Criterios de aceptación (Gherkin):**
@@ -197,6 +199,8 @@ THEN recibe HTTP 403 Forbidden
 
 **Prioridad:** Must · **SP:** 5 · **Sprint:** S1 · **Dependencias:** HU-01-04 · **iE_ID:** iE3.2
 
+> 🔲 **DIFERIDO (2026-06-15):** requiere **servicio de correo** (Resend, backend.md §2) para enviar el link de invitación. Se retoma al integrar el correo. Estado en `specs/TRACEABILITY.md`.
+
 Como **Administrador**, quiero **invitar a mis empleados por email para que se registren**, para **onboarding rapido del equipo del restaurante**.
 
 **Criterios de aceptación (Gherkin):**
@@ -213,6 +217,8 @@ AND queda asociado al tenant del invitador
 
 **Prioridad:** Should · **SP:** 2 · **Sprint:** S1 · **Dependencias:** HU-01-02 · **iE_ID:** iE3.2
 
+> ✅ **Implementado (PR #11)** salvo la *notificación por email del cambio*, **diferida** (requiere Resend). El cambio + revocación de sesiones sí está.
+
 Como **Usuario**, quiero **cambiar mi contraseña actual desde mi perfil**, para **mantener la seguridad de mi cuenta**.
 
 **Criterios de aceptación (Gherkin):**
@@ -228,6 +234,8 @@ AND se notifica por email del cambio
 #### HU-01-07 · Recuperacion de contraseña
 
 **Prioridad:** Should · **SP:** 3 · **Sprint:** S1 · **Dependencias:** HU-01-02 · **iE_ID:** iE3.2
+
+> 🔲 **DIFERIDO (2026-06-15):** requiere **servicio de correo** (Resend) para enviar el link de recuperación. Se retoma al integrar el correo. Estado en `specs/TRACEABILITY.md`.
 
 Como **Usuario**, quiero **recuperar mi contraseña olvidada por email**, para **no perder acceso a mi cuenta**.
 
