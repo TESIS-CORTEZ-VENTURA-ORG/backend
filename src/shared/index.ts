@@ -17,3 +17,4 @@ export * from './catalog/menu';
 export * from './pos/salon';
 export * from './pos/order';
 export * from './pos/kitchen';
+export * from './inventory/inventory';
