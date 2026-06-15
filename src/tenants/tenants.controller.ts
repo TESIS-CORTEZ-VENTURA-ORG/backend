@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Patch, UseGuards } from '@nestjs/common';
+import { Audited } from '../audit/audited.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PoliciesGuard } from '../authz/policies.guard';
@@ -28,6 +29,7 @@ export class TenantsController {
 
   @Patch('settings')
   @RequireAbility('update', 'Setting')
+  @Audited('settings.update')
   async update(
     @CurrentUser() claims: JwtClaims,
     @Body(new ZodValidationPipe(tenantSettingsSchema)) dto: TenantSettingsInput,
