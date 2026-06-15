@@ -67,7 +67,7 @@ AND existe configuracion default por rol
 **Implementado ✅:**
 - `GET /api/notifications/preferences` → `{ items: [{ type, inApp, email }] }` del usuario actual (las persistidas; tipos sin preferencia explícita usan el **default**: `inApp=true`, `email=false`).
 - `PATCH /api/notifications/preferences` body `{ type, inApp?, email? }` → upsert (`@@unique[tenantId,userId,type]`); devuelve la preferencia resultante.
-- **El sistema respeta la preferencia al crear**: `NotificationsService.create*` consulta la preferencia del `userId` destino para ese `type`; si `inApp === false` → **no** persiste la notificación in-app (se omite). Para broadcast (`userId = null`) no hay un usuario concreto cuya preferencia consultar → **siempre** se persiste (cada quien la marca leída; un opt-out por-usuario de broadcasts es alcance futuro).
+- **El sistema respeta la preferencia al crear**: `NotificationsService.create*` consulta la preferencia para ese `type`; si `inApp === false` → **no** persiste la notificación in-app (se omite). **Dirigida** (`userId` concreto): mira la fila exacta de ese usuario. **Broadcast** (`userId = null`): no hay un destinatario único, así que se omite si **existe** alguna preferencia de ese tipo con `inApp = false` en el tenant (opt-out explícito). En el piloto (mono-usuario por tenant) esto equivale a respetar la preferencia del usuario; el **filtrado por-destinatario de broadcasts** en tenants multi-usuario (entregar a unos y a otros no) es alcance futuro.
 - **Default**: ausencia de fila = `inApp=true`, `email=false`. El "default por rol" del Gherkin se cubre con este default global (in-app activo para todos); diferenciarlo por rol es refinamiento futuro. `PUSH` queda fuera de alcance (sin app móvil); los canales modelados son in-app (activo) y email (reservado, HU-10-02).
 
 ## NotificationsService (exportado por el módulo)
@@ -115,6 +115,6 @@ Seed: tenant + owner (token del owner; las notificaciones son por usuario autent
 - **Crear notificaciones = interno** (service-to-service); no hay `POST /api/notifications` público (evita que un cliente fabrique notificaciones para otros).
 - **HU-10-02 email** diferido → Resend (servicio externo). `NotificationPreference.email` reserva el canal.
 - **HU-10-04 IA** diferido → E08/FastAPI. `data Json?` ya soporta el action button accionable.
-- **Broadcast + preferencia**: el opt-out por-usuario de notificaciones broadcast (p. ej. silenciar `low_stock` para un usuario concreto pese a ser broadcast) es alcance futuro; hoy la preferencia `inApp=false` aplica a notificaciones **dirigidas** a ese usuario.
+- **Broadcast + preferencia**: hoy un broadcast se **omite por completo** si existe un opt-out (`inApp=false`) de ese tipo en el tenant (correcto en el piloto mono-usuario). El **filtrado por-destinatario** (entregar el broadcast a los usuarios que SÍ lo quieren y omitirlo solo para los que opt-out) en tenants multi-usuario es alcance futuro.
 - **PUSH** fuera de alcance (sin app móvil nativa).
 - Cantidades en `data` como **string** (Decimal `.toFixed`), coherente con el resto del backend.

@@ -5,6 +5,7 @@ import { BillingModule } from './billing/billing.module';
 import { CatalogModule } from './catalog/catalog.module';
 import { CostingModule } from './costing/costing.module';
 import { InventoryModule } from './inventory/inventory.module';
+import { NotificationsModule } from './notifications/notifications.module';
 import { PlatformModule } from './platform/platform.module';
 import { PosModule } from './pos/pos.module';
 import { ReportsModule } from './reports/reports.module';
@@ -25,6 +26,7 @@ import { UsersModule } from './users/users.module';
     BillingModule,
     CostingModule,
     ReportsModule,
+    NotificationsModule,
   ],
 })
 export class AppModule {}
