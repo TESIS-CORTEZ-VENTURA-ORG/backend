@@ -212,6 +212,7 @@ Fuga cross-tenant = evento de mayor severidad del proyecto (prob. baja, impacto 
 | Embeddings | Voyage AI (voyage-3) | RAG | — |
 | Covariates | OpenWeatherMap + API feriados PE | Exógenas del forecast | pendiente diseño |
 
+- **Desarrollo local:** la BD corre en **Docker** (`docker-compose.yml`, imagen `pgvector/pgvector:pg17`, base `gastronomia_dev`) — Neon es solo prod/CI. Detalle en `CLAUDE.md` → "Base de datos local".
 - **CI/CD:** GitHub Actions → deploy a Coolify (Hetzner) y Vercel. Neon crea 1 branch de BD por PR (testing RLS sin tocar prod).
 - **Costo piloto:** Neon branching es clave para el flujo RLS por PR. Hetzner self-hosted vía Coolify reemplaza el modelo de Railway manteniendo el presupuesto autofinanciado (USD ~30.3k todo TP1+TP2).
 - **Single-point-of-failure distribuido:** caída de Neon/Vercel/Hetzner compromete el servicio (aceptado en fase piloto, 1 tenant).
