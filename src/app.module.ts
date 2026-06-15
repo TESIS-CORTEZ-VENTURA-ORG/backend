@@ -7,6 +7,7 @@ import { CostingModule } from './costing/costing.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { PlatformModule } from './platform/platform.module';
 import { PosModule } from './pos/pos.module';
+import { ReportsModule } from './reports/reports.module';
 import { TenantsModule } from './tenants/tenants.module';
 import { UsersModule } from './users/users.module';
 
@@ -23,6 +24,7 @@ import { UsersModule } from './users/users.module';
     InventoryModule,
     BillingModule,
     CostingModule,
+    ReportsModule,
   ],
 })
 export class AppModule {}
