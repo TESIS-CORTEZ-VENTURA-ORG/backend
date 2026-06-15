@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../platform/prisma/prisma.service';
 import { RecipesService } from '../catalog/recipes.service';
@@ -32,6 +32,49 @@ const HUNDRED = new Prisma.Decimal(100);
 // Umbrales ABC/Pareto por revenue acumulado (HU-07-08, Menu Engineering / 80-20).
 const ABC_A_MAX = new Prisma.Decimal(80);
 const ABC_B_MAX = new Prisma.Decimal(95);
+
+// HU-07-05 · Estado del stock frente a su mínimo de reorden (misma regla que E05
+// InventoryService.statusFor; se replica aquí para no cruzar la frontera de módulos).
+const CRITICAL_FACTOR = new Prisma.Decimal('0.5'); // crítico = stock ≤ minStock·0.5
+export type StockStatus = 'ok' | 'low' | 'critical';
+
+// HU-07-06 · Food cost objetivo de referencia (la UI resalta los platos que lo superen).
+const TARGET_FOOD_COST_PCT = new Prisma.Decimal(30);
+
+// HU-07-07 · Etiqueta para mermas sin razón registrada (agrupación de byReason).
+const NO_REASON_LABEL = 'sin razón';
+
+/** Clasifica el stock frente al mínimo: critical ≤ min·0.5; low < min; si no ok. */
+function statusFor(
+  stock: Prisma.Decimal,
+  minStock: Prisma.Decimal,
+): StockStatus {
+  if (minStock.lte(0)) return 'ok'; // sin umbral configurado → nunca alerta
+  if (stock.lte(minStock.mul(CRITICAL_FACTOR))) return 'critical';
+  if (stock.lt(minStock)) return 'low';
+  return 'ok';
+}
+
+/**
+ * Rango [inicio, fin) del mes calendario `YYYY-MM` en UTC (las fechas de venta se
+ * guardan como timestamp; el corte mensual usa el primer día del mes y el del
+ * siguiente). Igual que `CostingService.monthRange` (replicado: frontera de módulos).
+ */
+function monthRange(period: string): { start: Date; end: Date } {
+  const match = /^(\d{4})-(\d{2})$/.exec(period);
+  if (!match) {
+    throw new BadRequestException('El período debe tener formato YYYY-MM');
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]); // 1..12
+  if (month < 1 || month > 12) {
+    throw new BadRequestException('Mes inválido en el período');
+  }
+  return {
+    start: new Date(Date.UTC(year, month - 1, 1)),
+    end: new Date(Date.UTC(year, month, 1)),
+  };
+}
 
 export type ByMethod = Record<PaymentMethodKey, string>;
 export type ByDocType = Record<DocTypeKey, string>;
@@ -115,6 +158,79 @@ export interface ParetoDish {
 export interface ParetoReport {
   items: ParetoDish[];
   totalRevenue: string;
+}
+
+// HU-07-05 · Una línea del reporte de inventario (valoración del stock actual).
+export interface InventoryReportItem {
+  ingredientId: string;
+  name: string;
+  unit: string;
+  stock: string; // .toFixed(3)
+  minStock: string; // .toFixed(3)
+  unitCost: string; // .toFixed(2)
+  stockValue: string; // stock·unitCost (.toFixed(2))
+  status: StockStatus;
+}
+
+// HU-07-05 · Reporte de inventario: valoración total + alertas + detalle por insumo.
+export interface InventoryReport {
+  generatedAt: string;
+  totalSkus: number;
+  totalStockValue: string;
+  lowStockCount: number;
+  criticalCount: number;
+  items: InventoryReportItem[];
+}
+
+// HU-07-06 · Una línea del reporte de food cost (food cost % por plato).
+export interface FoodCostDish {
+  name: string;
+  sellPrice: string;
+  ingredientCost: string;
+  foodCostPct: string;
+  unitsSold: number;
+  revenue: string;
+}
+
+// HU-07-06 · Reporte de food cost: % global + objetivo + detalle por plato.
+export interface FoodCostReport {
+  period: string;
+  overallFoodCostPct: string;
+  targetFoodCostPct: string;
+  dishes: FoodCostDish[];
+}
+
+// HU-07-07 · Merma agregada por insumo / por razón (qty = magnitud, cost = PEN).
+export interface WasteByIngredient {
+  ingredientId: string;
+  name: string;
+  qty: string;
+  cost: string;
+}
+export interface WasteByReason {
+  reason: string;
+  qty: string;
+  cost: string;
+}
+// HU-07-07 · Una merma del detalle (kardex de salidas type='waste').
+export interface WasteMovement {
+  id: string;
+  ingredientId: string;
+  ingredientName: string;
+  qty: string; // magnitud .toFixed(3)
+  unit: string;
+  reason: string | null;
+  createdAt: string;
+}
+// HU-07-07 · Reporte de mermas en una ventana: totales + desgloses + detalle.
+export interface WasteReport {
+  from: string;
+  to: string;
+  totalWasteQty: string;
+  totalWasteCost: string;
+  byIngredient: WasteByIngredient[];
+  byReason: WasteByReason[];
+  movements: WasteMovement[];
 }
 
 // Agregado interno de un plato vendido en la ventana.
@@ -330,6 +446,208 @@ export class ReportsService {
     });
   }
 
+  /**
+   * HU-07-05 · Reporte de inventario: valoración del stock ACTUAL (no hay snapshots
+   * históricos por fecha en el kardex; la "fecha de corte" es el instante de
+   * generación). Por cada insumo vivo: stock, costo unitario, valor (stock·unitCost)
+   * y estado de alerta (misma regla que E05). Totales: nº de SKUs, valor total del
+   * stock, conteo de bajos (`minStock>0 && stock<minStock`) y de críticos.
+   */
+  async inventoryReport(tenantId: string): Promise<InventoryReport> {
+    return this.prisma.runInTenant(tenantId, async (tx) => {
+      const rows = await tx.ingredient.findMany({
+        where: { deletedAt: null },
+        orderBy: { name: 'asc' },
+      });
+      let totalStockValue = new Prisma.Decimal(0);
+      let lowStockCount = 0;
+      let criticalCount = 0;
+      const items: InventoryReportItem[] = rows.map((i) => {
+        const stockValue = i.stock.mul(i.unitCost);
+        totalStockValue = totalStockValue.add(stockValue);
+        const status = statusFor(i.stock, i.minStock);
+        if (status === 'low' || status === 'critical') lowStockCount += 1;
+        if (status === 'critical') criticalCount += 1;
+        return {
+          ingredientId: i.id,
+          name: i.name,
+          unit: i.unit,
+          stock: i.stock.toFixed(3),
+          minStock: i.minStock.toFixed(3),
+          unitCost: i.unitCost.toFixed(2),
+          stockValue: stockValue.toFixed(2),
+          status,
+        };
+      });
+      return {
+        generatedAt: new Date().toISOString(),
+        totalSkus: rows.length,
+        totalStockValue: totalStockValue.toFixed(2),
+        lowStockCount,
+        criticalCount,
+        items,
+      };
+    });
+  }
+
+  /**
+   * HU-07-06 · Reporte de food cost del período (`YYYY-MM`): food cost % global y
+   * por plato. Por plato: `ingredientCost` (BOM recursivo, vía RecipesService),
+   * `sellPrice`, `foodCostPct = ingredientCost/sellPrice·100`, `unitsSold` (Σ qty de
+   * los `order_items` de ventas `issued` del mes) y `revenue = sellPrice·unitsSold`.
+   * `overallFoodCostPct = Σ(ingredientCost·unitsSold) / Σ revenue · 100`. Ordena los
+   * platos desc por `foodCostPct` (ranking; desempate por nombre).
+   */
+  async foodCostReport(
+    tenantId: string,
+    period: string,
+  ): Promise<FoodCostReport> {
+    return this.prisma.runInTenant(tenantId, async (tx) => {
+      const unitsByDish = await this.unitsSoldByDish(tx, period);
+      const menuItems = await tx.menuItem.findMany({
+        where: { deletedAt: null, isActive: true },
+        orderBy: { name: 'asc' },
+      });
+
+      let totalIngredientCost = new Prisma.Decimal(0);
+      let totalRevenue = new Prisma.Decimal(0);
+      const dishes: FoodCostDish[] = [];
+      for (const item of menuItems) {
+        const ingredientCost = await this.recipes.costPerYieldTx(
+          tx,
+          item.recipeId,
+        );
+        const unitsSold = unitsByDish.get(item.id) ?? 0;
+        const sellPrice = item.price;
+        const revenue = sellPrice.mul(unitsSold);
+        const foodCostPct = sellPrice.isZero()
+          ? new Prisma.Decimal(0)
+          : ingredientCost.div(sellPrice).mul(HUNDRED);
+        totalIngredientCost = totalIngredientCost.add(
+          ingredientCost.mul(unitsSold),
+        );
+        totalRevenue = totalRevenue.add(revenue);
+        dishes.push({
+          name: item.name,
+          sellPrice: sellPrice.toFixed(2),
+          ingredientCost: ingredientCost.toFixed(2),
+          foodCostPct: foodCostPct.toFixed(2),
+          unitsSold,
+          revenue: revenue.toFixed(2),
+        });
+      }
+      dishes.sort((a, b) => {
+        const diff = Number(b.foodCostPct) - Number(a.foodCostPct);
+        return diff !== 0 ? diff : a.name.localeCompare(b.name);
+      });
+
+      const overall = totalRevenue.isZero()
+        ? new Prisma.Decimal(0)
+        : totalIngredientCost.div(totalRevenue).mul(HUNDRED);
+      return {
+        period,
+        overallFoodCostPct: overall.toFixed(2),
+        targetFoodCostPct: TARGET_FOOD_COST_PCT.toFixed(2),
+        dishes,
+      };
+    });
+  }
+
+  /**
+   * HU-07-07 · Reporte de mermas en la ventana (`inventory_movements.type='waste'`
+   * con `createdAt ∈ [from, to]`). Por cada merma el costo = `|qty|·ingredient.unitCost`
+   * (igual que E05). Agrega por insumo (`byIngredient`) y por razón (`byReason`),
+   * ambos desc por costo, y devuelve el detalle (`movements`, desc por fecha). `qty`
+   * se reporta siempre como magnitud (`|qty|`).
+   */
+  async wasteReport(
+    tenantId: string,
+    fromIso?: string,
+    toIso?: string,
+  ): Promise<WasteReport> {
+    const window = resolveWindow(fromIso, toIso);
+    return this.prisma.runInTenant(tenantId, async (tx) => {
+      const rows = await tx.inventoryMovement.findMany({
+        where: {
+          type: 'waste',
+          createdAt: { gte: window.from, lte: window.to },
+        },
+        include: { ingredient: true },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      let totalQty = new Prisma.Decimal(0);
+      let totalCost = new Prisma.Decimal(0);
+      const byIngredient = new Map<
+        string,
+        { name: string; qty: Prisma.Decimal; cost: Prisma.Decimal }
+      >();
+      const byReason = new Map<
+        string,
+        { qty: Prisma.Decimal; cost: Prisma.Decimal }
+      >();
+      const movements: WasteMovement[] = [];
+
+      for (const m of rows) {
+        const qty = m.qty.abs();
+        const cost = qty.mul(m.ingredient.unitCost);
+        totalQty = totalQty.add(qty);
+        totalCost = totalCost.add(cost);
+
+        const ing = byIngredient.get(m.ingredientId) ?? {
+          name: m.ingredient.name,
+          qty: new Prisma.Decimal(0),
+          cost: new Prisma.Decimal(0),
+        };
+        ing.qty = ing.qty.add(qty);
+        ing.cost = ing.cost.add(cost);
+        byIngredient.set(m.ingredientId, ing);
+
+        const reasonKey = m.reason ?? NO_REASON_LABEL;
+        const rsn = byReason.get(reasonKey) ?? {
+          qty: new Prisma.Decimal(0),
+          cost: new Prisma.Decimal(0),
+        };
+        rsn.qty = rsn.qty.add(qty);
+        rsn.cost = rsn.cost.add(cost);
+        byReason.set(reasonKey, rsn);
+
+        movements.push({
+          id: m.id,
+          ingredientId: m.ingredientId,
+          ingredientName: m.ingredient.name,
+          qty: qty.toFixed(3),
+          unit: m.ingredient.unit,
+          reason: m.reason,
+          createdAt: m.createdAt.toISOString(),
+        });
+      }
+
+      return {
+        from: window.from.toISOString(),
+        to: window.to.toISOString(),
+        totalWasteQty: totalQty.toFixed(3),
+        totalWasteCost: totalCost.toFixed(2),
+        byIngredient: [...byIngredient.entries()]
+          .map(([ingredientId, v]) => ({
+            ingredientId,
+            name: v.name,
+            qty: v.qty.toFixed(3),
+            cost: v.cost.toFixed(2),
+          }))
+          .sort((a, b) => Number(b.cost) - Number(a.cost)),
+        byReason: [...byReason.entries()]
+          .map(([reason, v]) => ({
+            reason,
+            qty: v.qty.toFixed(3),
+            cost: v.cost.toFixed(2),
+          }))
+          .sort((a, b) => Number(b.cost) - Number(a.cost)),
+        movements,
+      };
+    });
+  }
+
   // --- helpers de datos (lectura directa, sin cruzar de módulo) ---
 
   // Ventas EMITIDAS (issued) en la ventana, con sus pagos. Excluye anuladas.
@@ -345,6 +663,34 @@ export class ReportsService {
       include: { payments: true },
       orderBy: { issuedAt: 'asc' },
     });
+  }
+
+  /**
+   * HU-07-06 · Unidades vendidas por plato en el período `YYYY-MM`: para cada `Sale`
+   * EMITIDA (`issued`) con `issuedAt` dentro del mes, suma `qty` de los `order_items`
+   * vivos de su orden, agrupando por `menuItemId`. Ignora ventas anuladas (`void`).
+   * Misma definición que `CostingService.unitsSoldByDish` (replicada: frontera de módulos).
+   */
+  private async unitsSoldByDish(
+    tx: Tx,
+    period: string,
+  ): Promise<Map<string, number>> {
+    const { start, end } = monthRange(period);
+    const sales = await tx.sale.findMany({
+      where: { status: 'issued', issuedAt: { gte: start, lt: end } },
+      select: { orderId: true },
+    });
+    const byDish = new Map<string, number>();
+    if (sales.length === 0) return byDish;
+    const orderIds = sales.map((s) => s.orderId);
+    const items = await tx.orderItem.findMany({
+      where: { orderId: { in: orderIds }, deletedAt: null },
+      select: { menuItemId: true, qty: true },
+    });
+    for (const it of items) {
+      byDish.set(it.menuItemId, (byDish.get(it.menuItemId) ?? 0) + it.qty);
+    }
+    return byDish;
   }
 
   private async voidCount(tx: Tx, window: DateWindow): Promise<number> {
