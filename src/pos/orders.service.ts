@@ -403,7 +403,12 @@ export class OrdersService {
     return order;
   }
 
-  private async buildView(tx: Tx, order: OrderRow): Promise<OrderView> {
+  /**
+   * Construye la vista de una orden dentro de una transacción dada. Público
+   * para que otros módulos (E04 billing) reutilicen la vista al cobrar, en la
+   * MISMA transacción (consistencia: la orden recién actualizada se ve `paid`).
+   */
+  async buildView(tx: Tx, order: OrderRow): Promise<OrderView> {
     const items = await tx.orderItem.findMany({
       where: { orderId: order.id, deletedAt: null },
       orderBy: { createdAt: 'asc' },

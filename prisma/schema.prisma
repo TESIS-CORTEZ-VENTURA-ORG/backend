@@ -48,6 +48,8 @@ model Tenant {
   kitchenStations KitchenStation[]
   inventoryMovements InventoryMovement[]
   purchaseOrders PurchaseOrder[]
+  sales          Sale[]
+  payments       Payment[]
 
   @@map("tenants")
 }
@@ -135,11 +137,63 @@ model Order {
   table  DiningTable @relation(fields: [tableId], references: [id])
   waiter User?       @relation(fields: [waiterId], references: [id])
   items  OrderItem[]
+  sale   Sale?
 
   @@unique([tenantId, idempotencyKey])
   @@index([tenantId])
   @@index([tableId])
   @@map("orders")
+}
+
+// HU-04-02 · Ticket/comprobante de una orden cobrada. Un ticket por orden
+// (orderId único). serie+number = correlativo por tenant (B001/F001…). Los
+// montos incluyen IGV: total = Σ ítems; subtotal = total/(1+igvRate); igv = total−subtotal.
+// status: issued | void. El envío electrónico a SUNAT es externo/fuera de alcance
+// (schema preparado). docType: boleta | factura.
+model Sale {
+  id          String    @id @default(uuid()) @db.Uuid
+  tenantId    String    @map("tenant_id") @db.Uuid
+  orderId     String    @map("order_id") @db.Uuid
+  serie       String
+  number      Int
+  docType     String    @map("doc_type")
+  customer    String?
+  customerDoc String?   @map("customer_doc")
+  subtotal    Decimal   @db.Decimal(12, 2)
+  igv         Decimal   @db.Decimal(12, 2)
+  total       Decimal   @db.Decimal(12, 2)
+  status      String    @default("issued")
+  voidReason  String?   @map("void_reason")
+  issuedAt    DateTime  @default(now()) @map("issued_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id])
+  order    Order     @relation(fields: [orderId], references: [id])
+  payments Payment[]
+
+  @@unique([orderId])
+  @@unique([tenantId, serie, number])
+  @@index([tenantId])
+  @@map("sales")
+}
+
+// HU-04-04/05/06 · Pago de un ticket. Varios pagos por venta → pago mixto.
+// method: cash | card | yape | plin (sin pasarela; solo registro).
+model Payment {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  saleId    String   @map("sale_id") @db.Uuid
+  method    String
+  amount    Decimal  @db.Decimal(12, 2)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  sale   Sale   @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  @@index([saleId])
+  @@index([tenantId])
+  @@map("payments")
 }
 
 // HU-03-04/05/10: ítem de una orden. name/unitPrice/modifiers son SNAPSHOTS del

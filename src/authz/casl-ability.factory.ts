@@ -73,6 +73,9 @@ export class CaslAbilityFactory {
       can(['create', 'update'], 'Order'); // tomar orden, enviar a cocina, anular
       can('update', 'Table'); // abrir mesa, cambiar estado, solicitar cuenta
       can('update', 'Kitchen'); // marcar ítem preparando/listo/servido
+      // E04 cobros: el cajero es `staff` → puede cobrar (emitir ticket + pagos).
+      // Anular ticket queda en manager/owner (no se da update/delete Sale a staff).
+      can('create', 'Sale'); // pre-cuenta, cuenta final, pagos (HU-04-01/02/04/05/06)
     }
 
     return build();

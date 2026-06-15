@@ -40,6 +40,17 @@ describe('CaslAbilityFactory (HU-01-04 matriz de permisos)', () => {
     expect(staff.can('delete', 'Zone')).toBe(false);
   });
 
+  it('cobros (E04): staff cobra pero NO anula; manager gestiona Sale', () => {
+    const staff = factory.createForRoles(['staff']);
+    expect(staff.can('read', 'Sale')).toBe(true); // ver ventas/comprobantes
+    expect(staff.can('create', 'Sale')).toBe(true); // cajero = staff → cobra
+    expect(staff.can('update', 'Sale')).toBe(false); // anular = manager/owner
+    expect(staff.can('delete', 'Sale')).toBe(false);
+
+    const manager = factory.createForRoles(['manager']);
+    expect(manager.can('manage', 'Sale')).toBe(true); // incl. anular ticket
+  });
+
   it('catálogo: owner/manager gestionan; staff solo lee', () => {
     expect(factory.createForRoles(['owner']).can('manage', 'Catalog')).toBe(
       true,

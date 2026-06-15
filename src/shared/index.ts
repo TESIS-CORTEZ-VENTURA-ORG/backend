@@ -19,3 +19,4 @@ export * from './pos/order';
 export * from './pos/kitchen';
 export * from './inventory/inventory';
 export * from './inventory/purchase-order';
+export * from './billing/sale';

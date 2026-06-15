@@ -21,5 +21,7 @@ import { ZonesService } from './zones.service';
     KitchenController,
   ],
   providers: [ZonesService, TablesService, OrdersService, KitchenService],
+  // E04 (billing) reutiliza OrdersService para la vista de la orden al cobrar.
+  exports: [OrdersService],
 })
 export class PosModule {}
