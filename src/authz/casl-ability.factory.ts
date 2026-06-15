@@ -12,6 +12,7 @@ export type AppSubject =
   | 'Tenant'
   | 'Setting'
   | 'Report'
+  | 'Catalog'
   | 'Recipe'
   | 'Inventory'
   | 'Sale'
@@ -22,8 +23,8 @@ export type AppAbility = MongoAbility<[AppAction, AppSubject]>;
 /**
  * Matriz de permisos por rol (backend.md §1, §4):
  *  - owner   → todo.
- *  - manager → lectura amplia + gestión operativa, SIN escribir settings ni usuarios.
- *  - staff   → lectura operativa (POS/KDS/inventario); sin reportes/usuarios/settings.
+ *  - manager → lectura amplia + gestión operativa y de catálogo, SIN escribir settings ni usuarios.
+ *  - staff   → lectura operativa + catálogo (POS/KDS); sin reportes/usuarios/settings.
  */
 @Injectable()
 export class CaslAbilityFactory {
@@ -38,13 +39,20 @@ export class CaslAbilityFactory {
 
     if (roles.includes('manager')) {
       can('read', 'all');
-      can('manage', ['Recipe', 'Inventory', 'Sale', 'Order', 'Report']);
+      can('manage', [
+        'Catalog',
+        'Recipe',
+        'Inventory',
+        'Sale',
+        'Order',
+        'Report',
+      ]);
       cannot(['create', 'update', 'delete'], 'User'); // gestión de usuarios = owner
       cannot(['create', 'update', 'delete'], 'Setting'); // sin escritura en settings
     }
 
     if (roles.includes('staff')) {
-      can('read', ['Recipe', 'Inventory', 'Sale', 'Order']); // POS/KDS/inventario
+      can('read', ['Catalog', 'Recipe', 'Inventory', 'Sale', 'Order']); // POS/KDS
     }
 
     return build();

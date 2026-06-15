@@ -26,4 +26,17 @@ describe('CaslAbilityFactory (HU-01-04 matriz de permisos)', () => {
     expect(a.can('read', 'User')).toBe(false);
     expect(a.can('update', 'Setting')).toBe(false);
   });
+
+  it('catálogo: owner/manager gestionan; staff solo lee', () => {
+    expect(factory.createForRoles(['owner']).can('manage', 'Catalog')).toBe(
+      true,
+    );
+    expect(factory.createForRoles(['manager']).can('create', 'Catalog')).toBe(
+      true,
+    );
+    expect(factory.createForRoles(['staff']).can('read', 'Catalog')).toBe(true);
+    expect(factory.createForRoles(['staff']).can('create', 'Catalog')).toBe(
+      false,
+    );
+  });
 });

@@ -32,9 +32,33 @@ model Tenant {
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
 
-  users User[]
+  users       User[]
+  ingredients Ingredient[]
 
   @@map("tenants")
+}
+
+// E02 — Catálogo. HU-02-01: insumos (productos base). SKU único por tenant,
+// soft delete. `unit`/`category` son strings por ahora (FK a units_of_measure /
+// categorías en HU-02-03/04). Costo en Decimal (money, backend.md §6).
+model Ingredient {
+  id        String    @id @default(uuid()) @db.Uuid
+  tenantId  String    @map("tenant_id") @db.Uuid
+  sku       String
+  name      String
+  type      String
+  unit      String
+  category  String?
+  unitCost  Decimal   @default(0) @db.Decimal(12, 2) @map("unit_cost")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, sku])
+  @@index([tenantId])
+  @@map("ingredients")
 }
 
 model User {
