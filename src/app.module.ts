@@ -4,6 +4,7 @@ import { AuthModule } from './auth/auth.module';
 import { BillingModule } from './billing/billing.module';
 import { CatalogModule } from './catalog/catalog.module';
 import { CostingModule } from './costing/costing.module';
+import { IngestionModule } from './ingestion/ingestion.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PlatformModule } from './platform/platform.module';
@@ -27,6 +28,7 @@ import { UsersModule } from './users/users.module';
     CostingModule,
     ReportsModule,
     NotificationsModule,
+    IngestionModule,
   ],
 })
 export class AppModule {}

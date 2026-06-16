@@ -23,3 +23,4 @@ export * from './billing/sale';
 export * from './costing/costing';
 export * from './reports/report';
 export * from './notifications/notification';
+export * from './ingestion/sales-history';
