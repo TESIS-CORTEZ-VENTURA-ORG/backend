@@ -1,6 +1,7 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import {
   BadRequestException,
+  HttpException,
   Injectable,
   NotFoundException,
   UnprocessableEntityException,
@@ -25,6 +26,10 @@ import {
 
 // core-ai exige al menos 2 puntos para inferir; con menos no hay serie útil.
 const MIN_POINTS_TO_FORECAST = 2;
+
+// Errores transitorios de infra (core-ai caído/lento) → vale reintentar el job.
+// El 422 (histórico insuficiente) es terminal: no se reintenta.
+const TRANSIENT_STATUSES = new Set([502, 503, 504]);
 
 /** Respuesta del seam de demanda: la serie + metadatos de calidad. Lo que `points`
  *  contiene es exactamente el `history` que consume `core-ai` (`frequency:"D"`). */
@@ -110,7 +115,13 @@ export class ForecastingService {
     await this.queue.add(
       'forecast',
       { runId: run.id, tenantId, input },
-      { jobId: run.id, removeOnComplete: true, removeOnFail: 500 },
+      {
+        jobId: run.id,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 2000 },
+        removeOnComplete: true,
+        removeOnFail: 500,
+      },
     );
 
     return this.toView(run);
@@ -157,7 +168,16 @@ export class ForecastingService {
           },
         }),
       );
+      // Transitorio (infra) → relanzar para que BullMQ reintente (attempts+backoff).
+      // Terminal (negocio, p. ej. 422) → no relanzar: el job termina, sin loop.
+      if (this.isTransient(err)) throw err;
     }
+  }
+
+  private isTransient(err: unknown): boolean {
+    return (
+      err instanceof HttpException && TRANSIENT_STATUSES.has(err.getStatus())
+    );
   }
 
   /** HU-08-02 · Consulta una corrida por id (polling de estado/resultado). */

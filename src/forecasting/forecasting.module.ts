@@ -6,6 +6,7 @@ import { PlatformModule } from '../platform/platform.module';
 import { FORECAST_QUEUE } from '../platform/queue/redis-connection';
 import { CoreAiClient } from './core-ai.client';
 import { ForecastProcessor } from './forecast.processor';
+import { ForecastScheduler } from './forecast.scheduler';
 import { ForecastingController } from './forecasting.controller';
 import { ForecastingService } from './forecasting.service';
 
@@ -24,6 +25,11 @@ import { ForecastingService } from './forecasting.service';
     BullModule.registerQueue({ name: FORECAST_QUEUE }),
   ],
   controllers: [ForecastingController],
-  providers: [ForecastingService, CoreAiClient, ForecastProcessor],
+  providers: [
+    ForecastingService,
+    CoreAiClient,
+    ForecastProcessor,
+    ForecastScheduler,
+  ],
 })
 export class ForecastingModule {}

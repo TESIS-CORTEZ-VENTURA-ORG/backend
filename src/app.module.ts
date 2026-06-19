@@ -1,5 +1,6 @@
 import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
+import { ScheduleModule } from '@nestjs/schedule';
 import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
 import { BillingModule } from './billing/billing.module';
@@ -22,6 +23,8 @@ import { UsersModule } from './users/users.module';
     // Config global de BullMQ (colas de IA: forecasting E08, chat E09). Conexión
     // Redis desde REDIS_URL. Las colas concretas se registran en cada módulo.
     BullModule.forRoot({ connection: redisConnection() }),
+    // Cron jobs (E08: forecast semanal). Cada @Cron declara su propia zona horaria.
+    ScheduleModule.forRoot(),
     PlatformModule,
     AuthModule,
     UsersModule,
