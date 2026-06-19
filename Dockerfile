@@ -15,6 +15,10 @@ RUN bunx prisma generate && bun run build
 # Entrypoint ejecutable (migra y arranca).
 RUN chmod +x ./docker-entrypoint.sh
 
+# Correr como usuario no-root (A3): la imagen oven/bun trae el usuario `bun`.
+RUN chown -R bun:bun /app
+USER bun
+
 EXPOSE 3000
 
 ENTRYPOINT ["./docker-entrypoint.sh"]
