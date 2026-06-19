@@ -1,0 +1,4 @@
+# Los scripts de shell DEBEN tener fin de línea LF: con CRLF, el contenedor Linux
+# falla el shebang (`/bin/sh^M: bad interpreter`). Garantiza LF en repo y working tree.
+*.sh text eol=lf
+docker-entrypoint.sh text eol=lf

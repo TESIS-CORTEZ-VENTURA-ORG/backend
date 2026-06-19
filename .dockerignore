@@ -1,0 +1,16 @@
+# Artefactos que no deben entrar a la imagen (acelera el build; node_modules y dist
+# se generan dentro del contenedor con la plataforma correcta para Prisma).
+node_modules/
+dist/
+coverage/
+test/
+.git/
+.gitignore
+.dockerignore
+Dockerfile
+docker-compose.yml
+.env
+.env.*
+!.env.example
+*.log
+.vscode/

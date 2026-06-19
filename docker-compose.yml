@@ -1,13 +1,19 @@
-# Postgres local para DESARROLLO/pruebas — mismo entorno para todo el equipo.
+# Stack local de GastronomIA — TODO dockerizado salvo el frontend (que corre aparte).
 # Decisión documentada en CLAUDE.md ("Base de datos local") y backend.md §9.
 #
-#   docker compose up -d      # levanta la DB (crea gastronomia_dev en el primer arranque)
-#   docker compose down       # la detiene (los datos persisten en el volumen)
-#   docker compose down -v    # la detiene y BORRA los datos
+#   docker compose up -d                 # levanta TODO: db + redis + core-ai + api
+#   docker compose up -d db redis        # solo infra (p. ej. correr el backend con watch en host)
+#   docker compose up -d --build         # reconstruye las imágenes de api/core-ai
+#   docker compose down                  # detiene (los datos persisten en el volumen)
+#   docker compose down -v               # detiene y BORRA los datos
+#
+# El servicio `core-ai` se construye desde el repo hermano. Por defecto `../core-ai`
+# (layout de clone fresco); para clones con otro nombre, exportar CORE_AI_PATH:
+#   CORE_AI_PATH=../team-core-ai docker compose up -d
 #
 # Producción usa Neon (PG17 + pgvector); esto es SOLO dev.
-# Imagen pgvector/pgvector:pg17 = PostgreSQL 17 + extensión pgvector (necesaria en E09/RAG;
-# recuerda CREATE EXTENSION vector; en una migración cuando llegue ese módulo).
+# pgvector/pgvector:pg17 = PostgreSQL 17 + pgvector (E09/RAG: CREATE EXTENSION vector;
+# en una migración cuando llegue ese módulo).
 services:
   db:
     image: pgvector/pgvector:pg17
@@ -21,8 +27,8 @@ services:
       - '5432:5432'
     volumes:
       - gastronomia_pgdata:/var/lib/postgresql/data
-      # Roles RLS (gastronomia_app). Corre solo en volúmenes nuevos; sobre un
-      # contenedor existente, aplicar manualmente (ver db/init/01-roles.sql).
+      # Roles RLS (gastronomia_app / gastronomia_auth). Corre solo en volúmenes
+      # nuevos; sobre un contenedor existente, aplicar manualmente (db/init/*.sql).
       - ./db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U postgres -d gastronomia_dev']
@@ -30,5 +36,79 @@ services:
       timeout: 5s
       retries: 10
 
+  # Redis para BullMQ (colas de IA: forecasting async E08, chat E09) y cache.
+  redis:
+    image: redis:7-alpine
+    container_name: gastronomia-redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - gastronomia_redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Microservicio de inferencia (FastAPI). NestJS orquesta, core-ai infiere.
+  core-ai:
+    build:
+      context: ${CORE_AI_PATH:-../core-ai}
+    image: gastronomia-core-ai:dev
+    container_name: gastronomia-core-ai
+    restart: unless-stopped
+    ports:
+      - '8000:8000'
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').getcode()==200 else 1)
+      interval: 10s
+      timeout: 3s
+      start_period: 30s
+      retries: 5
+
+  # API de negocio (NestJS). Hereda los secrets de ./.env y solo se sobrescriben
+  # los hostnames de la red Docker (db/redis/core-ai por nombre de servicio).
+  api:
+    build:
+      context: .
+    image: gastronomia-api:dev
+    container_name: gastronomia-api
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      # Runtime tenant-scoped (gastronomia_app, NOSUPERUSER → RLS aplica). Host = db.
+      DATABASE_URL: postgresql://gastronomia_app:gastronomia_app@db:5432/gastronomia_dev
+      # Lookup de credenciales en login (gastronomia_auth, BYPASSRLS, solo SELECT).
+      DATABASE_URL_AUTH: postgresql://gastronomia_auth:gastronomia_auth@db:5432/gastronomia_dev
+      CORE_AI_URL: http://core-ai:8000
+      REDIS_URL: redis://redis:6379
+      PORT: '3000'
+    ports:
+      - '3000:3000'
+    healthcheck:
+      test:
+        - CMD
+        - bun
+        - -e
+        - fetch('http://localhost:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))
+      interval: 10s
+      timeout: 3s
+      start_period: 40s
+      retries: 5
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      core-ai:
+        condition: service_healthy
+
 volumes:
   gastronomia_pgdata:
+  gastronomia_redisdata:
