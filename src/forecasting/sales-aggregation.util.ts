@@ -1,36 +1,25 @@
-// E08 · Agregación PURA de demanda diaria desde filas de `sales_history` (sin DB)
-// → testeable. Convierte el histórico de ventas en una serie temporal regular y
-// zero-filled lista para `core-ai` (`POST /forecast/run`, `history:[{ds,y}]`).
+// E08 · Zero-fill PURO de una serie de demanda diaria (sin DB) → testeable.
 //
-// El proyecto opera solo en America/Lima (CLAUDE.md §6, UTC-5 sin DST). Los
-// timestamps (`sold_on`) se guardan en UTC; el bucketing por día se hace en la
-// zona del tenant. La lógica de día local se replica aquí (no se importa el
-// módulo `reports`) para no cruzar la frontera de módulos (backend.md §3), igual
-// que hace `sales-history.service`.
+// El bucketing por día local (Lima) y la suma de unidades los hace Postgres
+// (GROUP BY en `forecasting.service`), que es donde está el dato y escala. Acá
+// solo se rellenan los días sin ventas con 0 (un día sin venta es demanda 0, no
+// un hueco — los modelos esperan una serie regular) y se clasifica la calidad.
 
-// America/Lima = UTC-5 fijo (sin horario de verano). Offset en minutos.
-const LIMA_OFFSET_MINUTES = -5 * 60;
-const MS_PER_MINUTE = 60_000;
-const MS_PER_DAY = 24 * 60 * MS_PER_MINUTE;
+const MS_PER_DAY = 24 * 60 * 60_000;
 
 // Umbrales de calidad para forecasting (HU-11-03 / E08): el histórico habilita
 // few-shot a partir de ~6 meses y "buena calidad" a partir de ~12 meses.
 const FEW_SHOT_MIN_DAYS = 180;
 const GOOD_MIN_DAYS = 365;
 
-/** Fila mínima de `sales_history` necesaria para agregar demanda. */
-export interface SalesRow {
-  soldOn: Date;
-  menuItemId: string | null;
-  dishName: string;
-  qty: number;
-}
-
-/** Punto de la serie temporal: `ds` = día local `YYYY-MM-DD`, `y` = unidades. */
-export interface HistoryPoint {
+/** Total de unidades de un día local: `ds` = `YYYY-MM-DD`, `y` = unidades. */
+export interface DailyTotal {
   ds: string;
   y: number;
 }
+
+/** Punto de la serie temporal (mismo shape que consume `core-ai`). */
+export type HistoryPoint = DailyTotal;
 
 export type DataQuality = 'insufficient' | 'few_shot' | 'good';
 
@@ -51,14 +40,6 @@ export function dataQualityFor(spanDays: number): DataQuality {
   return 'insufficient';
 }
 
-/** Clave de día local (Lima) `YYYY-MM-DD` para un instante UTC. */
-function limaDayKey(at: Date): string {
-  const local = new Date(at.getTime() + LIMA_OFFSET_MINUTES * MS_PER_MINUTE);
-  return utcMidnightMsToDayKey(
-    Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate()),
-  );
-}
-
 function dayKeyToUtcMidnightMs(dayKey: string): number {
   return new Date(`${dayKey}T00:00:00Z`).getTime();
 }
@@ -72,15 +53,30 @@ function utcMidnightMsToDayKey(ms: number): string {
 }
 
 /**
- * Construye una serie diaria zero-filled a partir de la demanda por día. Rellena
- * con 0 los días sin ventas entre el primero y el último (un día sin venta es
- * demanda 0, no un hueco — los modelos esperan una serie regular).
+ * Construye una serie diaria zero-filled a partir de los totales por día que
+ * devuelve la query (uno por día con ventas, ya en la zona del tenant). Rellena
+ * con 0 los días sin ventas entre el primero y el último.
  */
-function buildDailySeries(byDay: Map<string, number>): {
-  points: HistoryPoint[];
-  spanDays: number;
-} {
-  if (byDay.size === 0) return { points: [], spanDays: 0 };
+export function zeroFillDailySeries(
+  daily: DailyTotal[],
+  seriesId: string,
+  label: string,
+): AggregatedSeries {
+  const byDay = new Map<string, number>();
+  for (const d of daily) {
+    byDay.set(d.ds, (byDay.get(d.ds) ?? 0) + d.y);
+  }
+
+  if (byDay.size === 0) {
+    return {
+      seriesId,
+      label,
+      points: [],
+      observations: 0,
+      spanDays: 0,
+      dataQuality: dataQualityFor(0),
+    };
+  }
 
   const keys = [...byDay.keys()].sort();
   const firstMs = dayKeyToUtcMidnightMs(keys[0]);
@@ -92,20 +88,7 @@ function buildDailySeries(byDay: Map<string, number>): {
     const ds = utcMidnightMsToDayKey(ms);
     points.push({ ds, y: byDay.get(ds) ?? 0 });
   }
-  return { points, spanDays };
-}
 
-function seriesFrom(
-  rows: SalesRow[],
-  seriesId: string,
-  label: string,
-): AggregatedSeries {
-  const byDay = new Map<string, number>();
-  for (const row of rows) {
-    const key = limaDayKey(row.soldOn);
-    byDay.set(key, (byDay.get(key) ?? 0) + row.qty);
-  }
-  const { points, spanDays } = buildDailySeries(byDay);
   return {
     seriesId,
     label,
@@ -114,34 +97,4 @@ function seriesFrom(
     spanDays,
     dataQuality: dataQualityFor(spanDays),
   };
-}
-
-/** Demanda diaria agregada de TODO el menú (una sola serie). */
-export function aggregateTotalDemand(rows: SalesRow[]): AggregatedSeries {
-  return seriesFrom(rows, 'total', 'Demanda total');
-}
-
-/**
- * Demanda diaria de un plato concreto. Filtra por `menuItemId` (enlace exacto del
- * importador); las filas sin enlace (`menuItemId=null`) no pertenecen a ningún
- * plato del catálogo y se excluyen del forecasting por plato. La etiqueta usa el
- * nombre más reciente visto para ese plato.
- */
-export function aggregateMenuItem(
-  rows: SalesRow[],
-  menuItemId: string,
-): AggregatedSeries {
-  const matched = rows.filter((r) => r.menuItemId === menuItemId);
-  const label = labelForMenuItem(matched) ?? menuItemId;
-  return seriesFrom(matched, menuItemId, label);
-}
-
-function labelForMenuItem(rows: SalesRow[]): string | null {
-  let latest: SalesRow | null = null;
-  for (const row of rows) {
-    if (latest === null || row.soldOn.getTime() >= latest.soldOn.getTime()) {
-      latest = row;
-    }
-  }
-  return latest?.dishName ?? null;
 }
