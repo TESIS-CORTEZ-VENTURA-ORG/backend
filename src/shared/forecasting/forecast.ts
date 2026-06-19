@@ -64,6 +64,26 @@ export const runForecastSchema = z
   });
 export type RunForecastInput = z.infer<typeof runForecastSchema>;
 
+/** Estado de una corrida de forecasting (async). */
+export const forecastRunStatusSchema = z.enum([
+  'running',
+  'completed',
+  'failed',
+]);
+export type ForecastRunStatus = z.infer<typeof forecastRunStatusSchema>;
+
+/** Query de `GET /forecasting/predictions`: últimas predicciones por ámbito. */
+export const predictionsQuerySchema = z
+  .object({
+    scope: demandSeriesScopeSchema.default('total'),
+    menuItemId: z.uuid().optional(),
+  })
+  .refine((q) => q.scope !== 'menuItem' || q.menuItemId !== undefined, {
+    message: 'menuItemId es requerido cuando scope=menuItem',
+    path: ['menuItemId'],
+  });
+export type PredictionsQueryInput = z.infer<typeof predictionsQuerySchema>;
+
 /**
  * Mirror del contrato de respuesta de `core-ai` (`POST /forecast/run`). Zod es la
  * única fuente de verdad; Pydantic la espeja del lado Python. Se valida la

@@ -1,3 +1,4 @@
+import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
 import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
@@ -11,12 +12,16 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { PlatformModule } from './platform/platform.module';
 import { PosModule } from './pos/pos.module';
 import { ReportsModule } from './reports/reports.module';
+import { redisConnection } from './platform/queue/redis-connection';
 import { TenantsModule } from './tenants/tenants.module';
 import { UsersModule } from './users/users.module';
 
 /** Raíz de composición: importa los módulos por bounded context (backend.md §3). */
 @Module({
   imports: [
+    // Config global de BullMQ (colas de IA: forecasting E08, chat E09). Conexión
+    // Redis desde REDIS_URL. Las colas concretas se registran en cada módulo.
+    BullModule.forRoot({ connection: redisConnection() }),
     PlatformModule,
     AuthModule,
     UsersModule,

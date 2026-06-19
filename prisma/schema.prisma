@@ -56,6 +56,7 @@ model Tenant {
   notifications           Notification[]
   notificationPreferences NotificationPreference[]
   salesHistory            SalesHistory[]
+  forecastRuns            ForecastRun[]
 
   @@map("tenants")
 }
@@ -766,4 +767,34 @@ model SalesHistory {
   @@index([tenantId])
   @@index([tenantId, soldOn])
   @@map("sales_history")
+}
+
+// E08 · HU-08-02/04 — Corrida de forecasting (async). El POST encola un job en
+// BullMQ; el worker llama a core-ai y persiste el resultado acá. RLS FORCE (R4).
+// `points`/`backtest` se guardan como JSON (el resultado tal cual de core-ai).
+// status: running → completed | failed.
+model ForecastRun {
+  id           String    @id @default(uuid()) @db.Uuid
+  tenantId     String    @map("tenant_id") @db.Uuid
+  scope        String // 'total' | 'menuItem'
+  menuItemId   String?   @map("menu_item_id") @db.Uuid
+  horizon      Int
+  engine       String? // motor solicitado (auto/statsforecast/timesfm/…)
+  status       String    @default("running") // running | completed | failed
+  model        String? // modelo reportado por core-ai
+  baseline     String?
+  observations Int?
+  spanDays     Int?      @map("span_days")
+  dataQuality  String?   @map("data_quality")
+  points       Json? // [{ target_date, yhat, yhat_lo, yhat_hi }]
+  backtest     Json?
+  error        String?
+  createdAt    DateTime  @default(now()) @map("created_at")
+  completedAt  DateTime? @map("completed_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+  @@index([tenantId, scope, menuItemId, status, createdAt])
+  @@map("forecast_runs")
 }
