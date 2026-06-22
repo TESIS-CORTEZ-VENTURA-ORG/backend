@@ -20,6 +20,7 @@ export type AppSubject =
   | 'Zone'
   | 'Table'
   | 'Kitchen'
+  | 'Employee'
   | 'all';
 export type AppAbility = MongoAbility<[AppAction, AppSubject]>;
 
@@ -52,6 +53,7 @@ export class CaslAbilityFactory {
         'Zone', // configurar salón (zonas/mesas)
         'Table',
         'Kitchen',
+        'Employee',
       ]);
       cannot(['create', 'update', 'delete'], 'User'); // gestión de usuarios = owner
       cannot(['create', 'update', 'delete'], 'Setting'); // sin escritura en settings

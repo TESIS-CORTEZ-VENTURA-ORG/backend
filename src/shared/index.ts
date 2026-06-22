@@ -25,3 +25,4 @@ export * from './reports/report';
 export * from './notifications/notification';
 export * from './ingestion/sales-history';
 export * from './forecasting/forecast';
+export * from './employees/employee';

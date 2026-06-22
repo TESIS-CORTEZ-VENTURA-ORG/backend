@@ -57,6 +57,7 @@ model Tenant {
   notificationPreferences NotificationPreference[]
   salesHistory            SalesHistory[]
   forecastRuns            ForecastRun[]
+  employees               Employee[]
 
   @@map("tenants")
 }
@@ -608,6 +609,7 @@ model User {
   tenant        Tenant         @relation(fields: [tenantId], references: [id])
   refreshTokens RefreshToken[]
   orders        Order[]
+  employee      Employee?
 
   @@index([tenantId])
   @@map("users")
@@ -767,6 +769,33 @@ model SalesHistory {
   @@index([tenantId])
   @@index([tenantId, soldOn])
   @@map("sales_history")
+}
+
+// E13 · Registro de empleados del tenant. Datos básicos: nombre, DNI, puesto, salario
+// (campo sensible: solo visible para owner). Relación opcional con User (userId = null
+// si el empleado no tiene cuenta en el sistema). RLS FORCE por tenant.
+model Employee {
+  id        String    @id @default(uuid()) @db.Uuid
+  tenantId  String    @map("tenant_id") @db.Uuid
+  firstName String    @map("first_name")
+  lastName  String    @map("last_name")
+  dni       String
+  position  String // validated by Zod: 'mozo' | 'cocina' | 'caja' | 'otro'
+  salary    Decimal   @db.Decimal(12, 2)
+  phone     String?
+  hiredAt   DateTime? @map("hired_at") @db.Date
+  active    Boolean   @default(true)
+  userId    String?   @unique @map("user_id") @db.Uuid
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  user   User?  @relation(fields: [userId], references: [id])
+
+  @@unique([tenantId, dni])
+  @@index([tenantId])
+  @@map("employees")
 }
 
 // E08 · HU-08-02/04 — Corrida de forecasting (async). El POST encola un job en
