@@ -19,7 +19,8 @@
     "test:debug": "vitest --inspect-brk --no-file-parallelism",
     "test:e2e": "vitest run --config ./vitest.config.e2e.ts",
     "keys:gen": "bun scripts/gen-jwt-keys.ts",
-    "db:roles": "for f in db/init/*.sql; do docker exec -i gastronomia-db psql -U postgres -d gastronomia_dev < \"$f\"; done"
+    "db:roles": "for f in db/init/*.sql; do docker exec -i gastronomia-db psql -U postgres -d gastronomia_dev < \"$f\"; done",
+    "deploy:check": "bun scripts/verify-demo-stack.ts"
   },
   "dependencies": {
     "@casl/ability": "^7.0.0",
