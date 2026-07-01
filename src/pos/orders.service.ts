@@ -10,6 +10,7 @@ import {
   type AddOrderItemsInput,
   type OpenOrderInput,
   type UpdateOrderItemInput,
+  type UpsellSuggestionsResponse,
   type VoidOrderInput,
 } from '../shared';
 
@@ -435,6 +436,75 @@ export class OrdersService {
         data: { status: 'free' },
       });
       return this.buildView(tx, updated);
+    });
+  }
+
+  /**
+   * HU-03-13 · Sugerencias de upsell: platos más vendidos en los últimos 30 días
+   * (por suma de qty en order_items) que NO están ya en la orden y están activos.
+   * `tenant_id` SIEMPRE del JWT. RLS FORCE garantiza aislamiento. `$queryRaw` para
+   * la agregación por popularidad — Prisma ORM no expresa ORDER BY SUM(..) DESC.
+   */
+  async upsellSuggestions(
+    tenantId: string,
+    orderId: string,
+    limit: number,
+  ): Promise<UpsellSuggestionsResponse> {
+    return this.prisma.runInTenant(tenantId, async (tx) => {
+      // Validate the order exists in the tenant (RLS covers cross-tenant, but a
+      // missing order in the same tenant should still return 404 — not 200 + []).
+      const order = await tx.order.findFirst({
+        where: { id: orderId, deletedAt: null },
+        select: { id: true },
+      });
+      if (!order) {
+        throw new NotFoundException('Orden no encontrada');
+      }
+
+      // IDs of menu items already in the current order (any status, not deleted).
+      const existingItems = await tx.orderItem.findMany({
+        where: { orderId, deletedAt: null },
+        select: { menuItemId: true },
+      });
+      const existingIds = existingItems.map((i) => i.menuItemId);
+
+      // Top-selling menu items in the last 30 days, excluding items already in the
+      // order and inactive/deleted menu items. Uses $queryRaw for SUM(qty) ranking.
+      type RankRow = {
+        menu_item_id: string;
+        name: string;
+        price: string;
+        times_sold: string;
+      };
+
+      const excludeList =
+        existingIds.length > 0
+          ? Prisma.sql`AND oi.menu_item_id NOT IN (${Prisma.join(existingIds.map((id) => Prisma.sql`${id}::uuid`))})`
+          : Prisma.sql``;
+
+      const rows = await tx.$queryRaw<RankRow[]>(Prisma.sql`
+        SELECT oi.menu_item_id::text,
+               mi.name,
+               mi.price::text,
+               SUM(oi.qty)::text AS times_sold
+        FROM   order_items oi
+        JOIN   menu_items  mi ON mi.id = oi.menu_item_id
+        WHERE  oi.created_at >= NOW() - INTERVAL '30 days'
+          AND  oi.deleted_at IS NULL
+          AND  mi.is_active  = true
+          AND  mi.deleted_at IS NULL
+          ${excludeList}
+        GROUP  BY oi.menu_item_id, mi.name, mi.price
+        ORDER  BY SUM(oi.qty) DESC
+        LIMIT  ${limit}
+      `);
+
+      return rows.map((r) => ({
+        menuItemId: r.menu_item_id,
+        name: r.name,
+        price: new Prisma.Decimal(r.price).toFixed(2),
+        timesSold: Number(r.times_sold),
+      }));
     });
   }
 

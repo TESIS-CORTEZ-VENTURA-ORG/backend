@@ -101,21 +101,65 @@ describe('Forecasting — serie de demanda agregada HU-08-02 (e2e)', () => {
     // "Fantasma" (sin enlace): 01-02 (5). Total diario: 01-01=5, 01-02=5, 01-03=0, 01-04=4.
     await admin.salesHistory.createMany({
       data: [
-        { tenantId: a.id, soldOn: at('2024-01-01'), dishName: 'Lomo Saltado', menuItemId: lomoId, qty: 3, unitPrice: 30, total: 90 },
-        { tenantId: a.id, soldOn: at('2024-01-01'), dishName: 'Lomo Saltado', menuItemId: lomoId, qty: 2, unitPrice: 30, total: 60 },
-        { tenantId: a.id, soldOn: at('2024-01-02'), dishName: 'Plato Fantasma', menuItemId: null, qty: 5, unitPrice: 10, total: 50 },
-        { tenantId: a.id, soldOn: at('2024-01-04'), dishName: 'Lomo Saltado', menuItemId: lomoId, qty: 4, unitPrice: 30, total: 120 },
+        {
+          tenantId: a.id,
+          soldOn: at('2024-01-01'),
+          dishName: 'Lomo Saltado',
+          menuItemId: lomoId,
+          qty: 3,
+          unitPrice: 30,
+          total: 90,
+        },
+        {
+          tenantId: a.id,
+          soldOn: at('2024-01-01'),
+          dishName: 'Lomo Saltado',
+          menuItemId: lomoId,
+          qty: 2,
+          unitPrice: 30,
+          total: 60,
+        },
+        {
+          tenantId: a.id,
+          soldOn: at('2024-01-02'),
+          dishName: 'Plato Fantasma',
+          menuItemId: null,
+          qty: 5,
+          unitPrice: 10,
+          total: 50,
+        },
+        {
+          tenantId: a.id,
+          soldOn: at('2024-01-04'),
+          dishName: 'Lomo Saltado',
+          menuItemId: lomoId,
+          qty: 4,
+          unitPrice: 30,
+          total: 120,
+        },
       ],
     });
 
     // --- Tenant B: histórico que NO debe filtrarse a A (aislamiento RLS) ---
     const b = await admin.tenant.create({ data: { name: 'Otro' } });
     await admin.salesHistory.create({
-      data: { tenantId: b.id, soldOn: at('2024-01-01'), dishName: 'Ajeno', menuItemId: null, qty: 999, unitPrice: 1, total: 999 },
+      data: {
+        tenantId: b.id,
+        soldOn: at('2024-01-01'),
+        dishName: 'Ajeno',
+        menuItemId: null,
+        qty: 999,
+        unitPrice: 1,
+        total: 999,
+      },
     });
 
-    const mf = await Test.createTestingModule({ imports: [AppModule] }).compile();
-    app = mf.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
+    const mf = await Test.createTestingModule({
+      imports: [AppModule],
+    }).compile();
+    app = mf.createNestApplication<NestFastifyApplication>(
+      new FastifyAdapter(),
+    );
     app.setGlobalPrefix('api');
     await app.init();
     await app.getHttpAdapter().getInstance().ready();
@@ -130,7 +174,9 @@ describe('Forecasting — serie de demanda agregada HU-08-02 (e2e)', () => {
   });
 
   it('total: agrega por día con zero-fill del día sin ventas', async () => {
-    const data = seriesSchema.parse((await getSeries(ownerToken).expect(200)).body).data;
+    const data = seriesSchema.parse(
+      (await getSeries(ownerToken).expect(200)).body,
+    ).data;
     expect(data.scope).toBe('total');
     expect(data.points).toEqual([
       { ds: '2024-01-01', y: 5 },
@@ -144,14 +190,21 @@ describe('Forecasting — serie de demanda agregada HU-08-02 (e2e)', () => {
   });
 
   it('aislamiento RLS: el total de A NO incluye las ventas de B (999)', async () => {
-    const data = seriesSchema.parse((await getSeries(ownerToken).expect(200)).body).data;
+    const data = seriesSchema.parse(
+      (await getSeries(ownerToken).expect(200)).body,
+    ).data;
     const sum = data.points.reduce((s, p) => s + p.y, 0);
     expect(sum).toBe(14); // 5+5+0+4 — sin el 999 de tenant B
   });
 
   it('por plato: filtra por menuItemId y excluye filas sin enlace', async () => {
     const data = seriesSchema.parse(
-      (await getSeries(ownerToken, `?scope=menuItem&menuItemId=${lomoId}`).expect(200)).body,
+      (
+        await getSeries(
+          ownerToken,
+          `?scope=menuItem&menuItemId=${lomoId}`,
+        ).expect(200)
+      ).body,
     ).data;
     expect(data.seriesId).toBe(lomoId);
     expect(data.label).toBe('Lomo Saltado');

@@ -19,11 +19,14 @@ import {
   ok,
   predictionsQuerySchema,
   runForecastSchema,
+  shoppingSuggestionsQuerySchema,
   type ApiResponse,
   type DemandSeriesQueryInput,
   type JwtClaims,
   type PredictionsQueryInput,
   type RunForecastInput,
+  type ShoppingSuggestionsQuery,
+  type ShoppingSuggestionsResponse,
 } from '../shared';
 import {
   ForecastingService,
@@ -118,6 +121,27 @@ export class ForecastingController {
         claims.tenant_id,
         query.scope,
         query.menuItemId,
+      ),
+    );
+  }
+
+  /**
+   * HU-08-06 · Sugerencias de compra basadas en el último pronóstico completado.
+   * Explota el BOM de todos los platos activos, compara consumo proyectado vs stock
+   * actual y devuelve los insumos con shortfall. `needsForecast: true` si no hay
+   * corrida completada. `tenant_id` SIEMPRE del JWT. CASL `read Report`.
+   */
+  @Get('shopping-suggestions')
+  @RequireAbility('read', 'Report')
+  async shoppingSuggestions(
+    @CurrentUser() claims: JwtClaims,
+    @Query(new ZodValidationPipe(shoppingSuggestionsQuerySchema))
+    query: ShoppingSuggestionsQuery,
+  ): Promise<ApiResponse<ShoppingSuggestionsResponse>> {
+    return ok(
+      await this.forecasting.shoppingSuggestions(
+        claims.tenant_id,
+        query.horizon,
       ),
     );
   }

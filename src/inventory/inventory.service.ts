@@ -8,6 +8,8 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../platform/prisma/prisma.service';
 import {
   type CreateMovementInput,
+  type IngredientCoverageResponse,
+  type PriceTrendResponse,
   type UpdateInventoryLevelInput,
 } from '../shared';
 
@@ -271,6 +273,87 @@ export class InventoryService {
         // Más crítico primero: mayor déficit absoluto encabeza.
         .sort((a, b) => Number(b.deficit) - Number(a.deficit))
     );
+  }
+
+  /**
+   * HU-05-11 · Cobertura de stock: días estimados que durará el stock actual dado
+   * el consumo promedio diario de los últimos 30 días (movimientos type='sale').
+   * `daysLeft` es null cuando avgDailyConsumption = 0 (cobertura indefinida).
+   * Usa `$queryRaw` para el `SUM(ABS(qty))` en la ventana fija (RLS FORCE activo).
+   */
+  async ingredientCoverage(
+    tenantId: string,
+    ingredientId: string,
+  ): Promise<IngredientCoverageResponse> {
+    return this.prisma.runInTenant(tenantId, async (tx) => {
+      const ingredient = await tx.ingredient.findFirst({
+        where: { id: ingredientId, deletedAt: null },
+        select: { id: true, stock: true },
+      });
+      if (!ingredient) {
+        throw new NotFoundException('Insumo no encontrado');
+      }
+
+      // Consumption = sum of absolute qty for type='sale' in last 30 days.
+      // Using $queryRaw for the ABS aggregate — Prisma ORM lacks SUM(ABS(...)).
+      const rows = await tx.$queryRaw<{ total: string | null }[]>(Prisma.sql`
+        SELECT SUM(ABS(qty))::text AS total
+        FROM inventory_movements
+        WHERE ingredient_id = ${ingredientId}::uuid
+          AND type = 'sale'
+          AND created_at >= NOW() - INTERVAL '30 days'
+      `);
+
+      const totalConsumed = new Prisma.Decimal(rows[0]?.total ?? '0');
+      const BASE_DAYS = new Prisma.Decimal(30);
+      const avgDaily = totalConsumed.div(BASE_DAYS);
+
+      const daysLeft = avgDaily.gt(0)
+        ? ingredient.stock.div(avgDaily).toFixed(1)
+        : null;
+
+      return {
+        ingredientId: ingredient.id,
+        currentStock: ingredient.stock.toFixed(3),
+        avgDailyConsumption: avgDaily.toFixed(3),
+        basedOnDays: 30,
+        daysLeft,
+      };
+    });
+  }
+
+  /**
+   * HU-05-12 · Historial de precios de compra de un insumo, descendente por fecha.
+   * Se alimenta automáticamente al recepcionar cada OC (purchase-orders.service).
+   * `limit` controla cuántos puntos devolver (default 12, max 50 según el schema).
+   */
+  async priceTrend(
+    tenantId: string,
+    ingredientId: string,
+    limit: number,
+  ): Promise<PriceTrendResponse> {
+    return this.prisma.runInTenant(tenantId, async (tx) => {
+      const ingredient = await tx.ingredient.findFirst({
+        where: { id: ingredientId, deletedAt: null },
+        select: { id: true },
+      });
+      if (!ingredient) {
+        throw new NotFoundException('Insumo no encontrado');
+      }
+
+      const rows = await tx.ingredientPriceHistory.findMany({
+        where: { ingredientId },
+        orderBy: { recordedAt: 'desc' },
+        take: limit,
+        select: { unitCost: true, recordedAt: true, source: true },
+      });
+
+      return rows.map((r) => ({
+        recordedAt: r.recordedAt.toISOString(),
+        unitCost: r.unitCost.toFixed(2),
+        source: r.source as 'purchase_order' | 'manual',
+      }));
+    });
   }
 
   /**

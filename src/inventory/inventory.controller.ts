@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -17,10 +18,14 @@ import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import {
   createMovementSchema,
   ok,
+  priceTrendQuerySchema,
   updateInventoryLevelSchema,
   type ApiResponse,
   type CreateMovementInput,
+  type IngredientCoverageResponse,
   type JwtClaims,
+  type PriceTrendQuery,
+  type PriceTrendResponse,
   type UpdateInventoryLevelInput,
 } from '../shared';
 import {
@@ -101,5 +106,36 @@ export class InventoryController {
     @CurrentUser() claims: JwtClaims,
   ): Promise<ApiResponse<WasteHistoryView>> {
     return ok(await this.inventory.listWaste(claims.tenant_id));
+  }
+
+  /**
+   * HU-05-11 · Cobertura de stock de un insumo, basada en el consumo real promedio
+   * de los últimos 30 días (movimientos type='sale'). `daysLeft` es null cuando el
+   * consumo es 0 (cobertura indefinida). `tenant_id` SIEMPRE del JWT; `id` del path.
+   */
+  @Get('ingredients/:id/coverage')
+  @RequireAbility('read', 'Inventory')
+  async coverage(
+    @CurrentUser() claims: JwtClaims,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<ApiResponse<IngredientCoverageResponse>> {
+    return ok(await this.inventory.ingredientCoverage(claims.tenant_id, id));
+  }
+
+  /**
+   * HU-05-12 · Tendencia de precio de un insumo: historial descendente de precios
+   * de compra (OC recepcionadas). `limit` (default 12, max 50) controla cuántos
+   * puntos devolver. Alimentado automáticamente al recepcionar cada OC.
+   */
+  @Get('ingredients/:id/price-trend')
+  @RequireAbility('read', 'Inventory')
+  async priceTrend(
+    @CurrentUser() claims: JwtClaims,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query(new ZodValidationPipe(priceTrendQuerySchema)) query: PriceTrendQuery,
+  ): Promise<ApiResponse<PriceTrendResponse>> {
+    return ok(
+      await this.inventory.priceTrend(claims.tenant_id, id, query.limit),
+    );
   }
 }

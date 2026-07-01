@@ -58,6 +58,7 @@ model Tenant {
   salesHistory            SalesHistory[]
   forecastRuns            ForecastRun[]
   employees               Employee[]
+  ingredientPriceHistory  IngredientPriceHistory[]
 
   @@map("tenants")
 }
@@ -507,15 +508,36 @@ model Ingredient {
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
 
-  tenant             Tenant              @relation(fields: [tenantId], references: [id])
+  tenant             Tenant                   @relation(fields: [tenantId], references: [id])
   productSuppliers   ProductSupplier[]
   recipeItems        RecipeItem[]
   inventoryMovements InventoryMovement[]
   purchaseOrderItems PurchaseOrderItem[]
+  priceHistory       IngredientPriceHistory[]
 
   @@unique([tenantId, sku])
   @@index([tenantId])
   @@map("ingredients")
+}
+
+// HU-05-12 — Historial de precios de insumos (E05). Se alimenta automáticamente al
+// recepcionar una OC (source='purchase_order'). RLS FORCE por tenant (R4); la policy
+// vive en el SQL de la migración (20260630000000_ingredient_price_history).
+model IngredientPriceHistory {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
+  ingredientId String   @map("ingredient_id") @db.Uuid
+  unitCost     Decimal  @map("unit_cost") @db.Decimal(12, 2)
+  recordedAt   DateTime @map("recorded_at") @db.Timestamptz
+  source       String   @default("purchase_order")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+  ingredient Ingredient @relation(fields: [ingredientId], references: [id])
+
+  @@index([tenantId])
+  @@index([tenantId, ingredientId, recordedAt])
+  @@map("ingredient_price_history")
 }
 
 // HU-05-01/02/03/08: movimiento de inventario (kardex event-sourced). qty es un

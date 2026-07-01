@@ -11,7 +11,8 @@ export const createEmployeeSchema = z.object({
   position: positionSchema,
   salary: z
     .string()
-    .regex(/^\d+(\.\d{1,2})?$/, 'salary must be a decimal string'),
+    .regex(/^\d+(\.\d{1,2})?$/, 'salary must be a decimal string')
+    .optional(),
   phone: z.string().optional(),
   hiredAt: z.string().datetime({ offset: true }).optional().nullable(),
   active: z.boolean().optional(),

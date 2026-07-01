@@ -238,6 +238,20 @@ export class PurchaseOrdersService {
             unitCost: item.unitCost,
           },
         });
+
+        // HU-05-12: register the purchase price in the history so the price-trend
+        // endpoint has real data points. One row per received PO line, within the
+        // same transaction that updates stock (atomicity guaranteed).
+        await tx.ingredientPriceHistory.create({
+          data: {
+            tenantId,
+            ingredientId: item.ingredientId,
+            unitCost: item.unitCost,
+            recordedAt: new Date(),
+            source: 'purchase_order',
+          },
+        });
+
         // Reflejar el acumulado en el mapa para multi-línea del mismo insumo.
         itemById.set(item.id, { ...item, qtyReceived: newReceived });
       }

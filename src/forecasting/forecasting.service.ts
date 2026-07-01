@@ -16,6 +16,7 @@ import {
   type ForecastPoint,
   type ForecastRunStatus,
   type RunForecastInput,
+  type ShoppingSuggestionsResponse,
 } from '../shared';
 import { CoreAiClient } from './core-ai.client';
 import {
@@ -287,6 +288,204 @@ export class ForecastingService {
         rows: validation.rows,
         summary: validation.summary,
       };
+    });
+  }
+
+  /**
+   * HU-08-06 · Sugerencias de compra basadas en el último pronóstico completado
+   * (scope='total'). Flujo:
+   *   1. Encuentra la corrida completada más reciente del tenant.
+   *   2. Suma `yhat` de hoy hacia adelante hasta `horizon` días (zona Lima).
+   *   3. Calcula la participación de cada plato en las ventas de los últimos 30 días.
+   *   4. Explota el BOM (2 niveles) de cada plato activo con receta.
+   *   5. Compara el consumo proyectado de cada insumo contra el stock actual.
+   *   6. Devuelve solo los insumos con shortfall > 0, ordenados de mayor a menor.
+   *
+   * Invariantes: `tenant_id` SIEMPRE del JWT; RLS FORCE en la tx; sin BOM nivel 3.
+   * Si no existe corrida completada → `needsForecast: true`, lista vacía.
+   */
+  async shoppingSuggestions(
+    tenantId: string,
+    horizon: number,
+  ): Promise<ShoppingSuggestionsResponse> {
+    return this.prisma.runInTenant(tenantId, async (tx) => {
+      // Step 1: latest completed total-scope forecast run.
+      const run = await tx.forecastRun.findFirst({
+        where: { status: 'completed', scope: 'total' },
+        orderBy: { completedAt: 'desc' },
+      });
+
+      if (!run) {
+        return {
+          horizon,
+          source: 'forecast',
+          runId: null,
+          needsForecast: true,
+          suggestions: [],
+        };
+      }
+
+      // Step 2: sum yhat from today (Lima) forward for up to `horizon` days.
+      const today = this.todayLima();
+      const points = (run.points as unknown as ForecastPoint[] | null) ?? [];
+      const futurePoints = points
+        .filter((p) => p.target_date >= today)
+        .slice(0, horizon);
+
+      if (futurePoints.length === 0) {
+        // All forecast points are in the past — client should trigger a new run.
+        return {
+          horizon,
+          source: 'forecast',
+          runId: run.id,
+          needsForecast: true,
+          suggestions: [],
+        };
+      }
+
+      let totalForecast = new Prisma.Decimal(0);
+      for (const p of futurePoints) {
+        totalForecast = totalForecast.add(new Prisma.Decimal(p.yhat));
+      }
+
+      // Step 3: dish sales shares from the last 30 days in sales_history.
+      type DishRow = { menu_item_id: string; qty: string };
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const dishRows = await tx.$queryRaw<DishRow[]>(Prisma.sql`
+        SELECT menu_item_id::text, SUM(qty)::text AS qty
+        FROM   sales_history
+        WHERE  sold_on >= ${thirtyDaysAgo}::timestamp
+        GROUP  BY menu_item_id
+      `);
+
+      const totalSold = dishRows.reduce((acc, d) => acc + Number(d.qty), 0);
+
+      if (totalSold === 0) {
+        // No historical sales → cannot distribute the forecast across dishes.
+        return {
+          horizon,
+          source: 'forecast',
+          runId: run.id,
+          needsForecast: false,
+          suggestions: [],
+        };
+      }
+
+      // Step 4: load active menu items with their 2-level BOM.
+      const menuItems = await tx.menuItem.findMany({
+        where: { isActive: true, deletedAt: null },
+        include: {
+          recipe: {
+            include: {
+              items: {
+                include: {
+                  ingredient: true,
+                  subRecipe: {
+                    include: {
+                      items: {
+                        include: { ingredient: true },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      // Index recipes by menuItemId for quick lookup during BOM explosion.
+      type RecipeWithBom = (typeof menuItems)[0]['recipe'];
+      const recipeByItemId = new Map<string, RecipeWithBom>();
+      for (const mi of menuItems) {
+        recipeByItemId.set(mi.id, mi.recipe);
+      }
+
+      // Step 5: BOM explosion — accumulate projected ingredient consumption.
+      const consumptionMap = new Map<
+        string,
+        { name: string; unit: string; qty: Prisma.Decimal }
+      >();
+
+      for (const dish of dishRows) {
+        const recipe = recipeByItemId.get(dish.menu_item_id);
+        if (!recipe) continue;
+
+        // Fraction of total demand attributed to this dish × total forecast.
+        const dishShare = new Prisma.Decimal(dish.qty).div(
+          new Prisma.Decimal(totalSold),
+        );
+        const dishDemand = totalForecast.mul(dishShare);
+
+        for (const item of recipe.items) {
+          if (item.ingredient) {
+            // Level-1 ingredient.
+            const prev = consumptionMap.get(item.ingredientId!);
+            const add = dishDemand.mul(item.qty);
+            consumptionMap.set(item.ingredientId!, {
+              name: item.ingredient.name,
+              unit: item.ingredient.unit,
+              qty: prev ? prev.qty.add(add) : add,
+            });
+          } else if (item.subRecipe) {
+            // Level-2 sub-recipe: distribute sub-recipe qty across its ingredients.
+            for (const sub of item.subRecipe.items) {
+              if (!sub.ingredient) continue;
+              const prev = consumptionMap.get(sub.ingredientId!);
+              const add = dishDemand.mul(item.qty).mul(sub.qty);
+              consumptionMap.set(sub.ingredientId!, {
+                name: sub.ingredient.name,
+                unit: sub.ingredient.unit,
+                qty: prev ? prev.qty.add(add) : add,
+              });
+            }
+          }
+        }
+      }
+
+      // Step 6: compare projected consumption vs current stock; return shortfalls.
+      const suggestions: ShoppingSuggestionsResponse['suggestions'] = [];
+
+      for (const [ingredientId, { name, unit, qty }] of consumptionMap) {
+        const ing = await tx.ingredient.findFirst({
+          where: { id: ingredientId, deletedAt: null },
+          select: { stock: true },
+        });
+        if (!ing) continue;
+
+        const shortfall = qty.sub(ing.stock);
+        if (shortfall.gt(0)) {
+          suggestions.push({
+            ingredientId,
+            name,
+            unit,
+            currentStock: ing.stock.toFixed(3),
+            forecastConsumption: qty.toFixed(3),
+            shortfall: shortfall.toFixed(3),
+            suggestedQty: shortfall.toFixed(3),
+          });
+        }
+      }
+
+      suggestions.sort((a, b) => Number(b.shortfall) - Number(a.shortfall));
+
+      return {
+        horizon,
+        source: 'forecast',
+        runId: run.id,
+        needsForecast: false,
+        suggestions,
+      };
+    });
+  }
+
+  /**
+   * Returns today's date in the Lima timezone (America/Lima, UTC-5, no DST)
+   * as 'YYYY-MM-DD'. Used to filter forecast points that are still in the future.
+   */
+  private todayLima(): string {
+    return new Date().toLocaleDateString('en-CA', {
+      timeZone: 'America/Lima',
     });
   }
 

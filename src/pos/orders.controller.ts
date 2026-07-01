@@ -3,8 +3,10 @@ import {
   Controller,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { Audited } from '../audit/audited.decorator';
@@ -18,12 +20,15 @@ import {
   ok,
   openOrderSchema,
   updateOrderItemSchema,
+  upsellQuerySchema,
   voidOrderSchema,
   type AddOrderItemsInput,
   type ApiResponse,
   type JwtClaims,
   type OpenOrderInput,
   type UpdateOrderItemInput,
+  type UpsellQuery,
+  type UpsellSuggestionsResponse,
   type VoidOrderInput,
 } from '../shared';
 import { OrdersService, type OrderView } from './orders.service';
@@ -100,5 +105,22 @@ export class OrdersController {
     @Body(new ZodValidationPipe(voidOrderSchema)) dto: VoidOrderInput,
   ): Promise<ApiResponse<OrderView>> {
     return ok(await this.orders.void(claims.tenant_id, id, dto));
+  }
+
+  /**
+   * HU-03-13 · Sugerencias de upsell: platos populares (últimos 30 días) no
+   * presentes en la orden actual. Útil para el mesero durante la toma de pedido.
+   * `tenant_id` SIEMPRE del JWT. CASL `read Order`.
+   */
+  @Get(':id/suggestions')
+  @RequireAbility('read', 'Order')
+  async suggestions(
+    @CurrentUser() claims: JwtClaims,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query(new ZodValidationPipe(upsellQuerySchema)) query: UpsellQuery,
+  ): Promise<ApiResponse<UpsellSuggestionsResponse>> {
+    return ok(
+      await this.orders.upsellSuggestions(claims.tenant_id, id, query.limit),
+    );
   }
 }

@@ -156,21 +156,31 @@ describe('secret-safe demo stack verifier helpers', () => {
 
 describe('PR3 deploy documentation contracts', () => {
   it('documents the Vercel frontend path and required production env names', () => {
-    const readme = readFileSync(join(backendRoot, '..', 'frontend', 'README.md'), 'utf8');
+    const readme = readFileSync(
+      join(backendRoot, '..', 'team-frontend', 'README.md'),
+      'utf8',
+    );
 
     expect(readme).toContain('vercel deploy --dry --cwd frontend');
-    expect(readme).toContain('vercel env add NUXT_API_BASE production --cwd frontend');
+    expect(readme).toContain(
+      'vercel env add NUXT_API_BASE production --cwd frontend',
+    );
     expect(readme).toContain('NUXT_API_BASE');
     expect(readme).toContain('Render backend');
     expect(readme).toContain('server/api/**');
   });
 
   it('documents demo credentials by variable name or placeholder only', () => {
-    const readme = readFileSync(join(backendRoot, '..', 'frontend', 'README.md'), 'utf8');
+    const readme = readFileSync(
+      join(backendRoot, '..', 'team-frontend', 'README.md'),
+      'utf8',
+    );
 
     expect(readme).toContain('NUXT_DEMO_PASSWORD');
     expect(readme).toContain('<redacted>');
-    expect(readme).not.toMatch(/password\s*[=:]\s*(?![`"]?NUXT_DEMO_PASSWORD|[`"]?<redacted>)[^\s`<][^\n)]*/i);
+    expect(readme).not.toMatch(
+      /password\s*[=:]\s*(?![`"]?NUXT_DEMO_PASSWORD|[`"]?<redacted>)[^\s`<][^\n)]*/i,
+    );
   });
 
   it('provides a secret-safe provider checklist and redacted evidence template', () => {

@@ -170,10 +170,10 @@
 
 ## E12 — Plataforma (lo tocado)
 
-| HU       | Título                         | Estado                                      | Spec                         | PR  |
-| -------- | ------------------------------ | ------------------------------------------- | ---------------------------- | --- |
-| HU-12-02 | Health checks                  | 🟡 Parcial (falta readiness db/redis + 503) | `HU-12-02-health-y-contrato` | #3  |
-| HU-12-06 | Aislamiento multi-tenant (RLS) | 🟢 Hecho (4 vectores)                       | `HU-12-06-rls-aislamiento`   | #4  |
+| HU       | Título                         | Estado                            | Spec                         | PR  |
+| -------- | ------------------------------ | --------------------------------- | ---------------------------- | --- |
+| HU-12-02 | Health checks                  | 🟢 Hecho (E12-1: readiness + 503) | `HU-12-02-health-y-contrato` | #3  |
+| HU-12-06 | Aislamiento multi-tenant (RLS) | 🟢 Hecho (4 vectores)             | `HU-12-06-rls-aislamiento`   | #4  |
 
 ## E13 — Personal (épica nueva, fuera del backlog E01–E12)
 
@@ -193,6 +193,24 @@ Registro básico de personal por tenant (RLS FORCE; `@@unique[tenant_id, dni]`; 
 `src/shared/` (contrato Zod), `PrismaService.runInTenant`, `ZodValidationPipe`, `JwtAuthGuard`,
 `PoliciesGuard`/CASL, `AuthDbClient`/`gastronomia_auth`, `AuditInterceptor`.
 
+## E09 — Chat IA: Asistente analítico Text-to-SQL (1 HU)
+
+| HU       | Título                                          | Estado   | Spec                       | PR  |
+| -------- | ----------------------------------------------- | -------- | -------------------------- | --- |
+| HU-09-01 | Consulta analítica en lenguaje natural (NL→SQL) | 🟢 Hecho | `e09/HU-09-01-chat-nl2sql` | —   |
+
+**Arquitectura:** NestJS `chat` module (ChatController + ChatService + CoreAiChatClient) ↔ core-ai `chat` feature (router + service + adapters: mock/openai/anthropic/xai + registry).
+
+**Seguridad (defense-in-depth):**
+
+1. SQL validation hard gate: 9 reglas (validateSql) — rechaza todo lo que no sea un SELECT read-only puro sobre el allowlist de tablas.
+2. RLS FORCE: ejecución bajo `runInTenant` — la consulta sólo ve filas del tenant del JWT.
+3. `SET LOCAL statement_timeout = '5000'` — timeout de 5s para prevenir DoS por queries costosas.
+
+**Tests:** `src/chat/sql-validator.util.spec.ts` (validator, 40+ unit tests cubriendo los 9 vectores de ataque) + `test/chat.e2e-spec.ts` (happy path, RBAC staff 403/401, 10 security vectors, RLS cross-tenant isolation).
+
+**Proveedores LLM:** mock (sin key, CI/demo) · openai (OPENAI_API_KEY) · anthropic (ANTHROPIC_API_KEY) · xai (XAI_API_KEY). Auto-select via `CORE_AI_CHAT_PROVIDER`.
+
 ## Próximas épicas
 
-E02 (catálogo/recetas) → E03 (POS) → E04 (cobros) → E05 (inventario) → E06 (costeo) → E07 (reportes) → E10 (notificaciones) → E11 (ingesta de histórico) **hechos** (backend construible). Pendientes por servicio externo/IA: E08 (forecasting), E09 (chat) y los diferidos de E01/E10/E11 (correo, R2, agregación/forecasting). Cada backend habilita proxear sus rutas del BFF.
+E02 (catálogo/recetas) → E03 (POS) → E04 (cobros) → E05 (inventario) → E06 (costeo) → E07 (reportes) → E08 (forecasting) → E09 (chat) → E10 (notificaciones) → E11 (ingesta de histórico) **hechos** (backend construible). Diferidos de E01/E10/E11: correo, R2, agregación. Cada backend habilita proxear sus rutas del BFF.
