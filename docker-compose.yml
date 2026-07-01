@@ -58,6 +58,15 @@ services:
     image: gastronomia-core-ai:dev
     container_name: gastronomia-core-ai
     restart: unless-stopped
+    # Chat IA (E09): proveedor LLM + API key. Los valores viven en ./.env (gitignored),
+    # docker-compose los sustituye acá. Sin key, el adapter cae en 'mock'. Para LLM real:
+    # setear CORE_AI_CHAT_PROVIDER + la API key del proveedor elegido en ./.env.
+    environment:
+      CORE_AI_CHAT_PROVIDER: ${CORE_AI_CHAT_PROVIDER:-}
+      CORE_AI_CHAT_MODEL: ${CORE_AI_CHAT_MODEL:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
     ports:
       - '8000:8000'
     healthcheck:
