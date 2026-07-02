@@ -35,9 +35,9 @@ const AMBIGUOUS_ANSWER =
   'agotarse?" o "¿cuánto voy a vender este fin de semana?".';
 
 const NEEDS_FORECAST_ANSWER =
-  'Todavía no generé ningún pronóstico para tu negocio, así que no puedo ' +
-  'responder preguntas sobre el futuro todavía. Andá a Forecasting y generá ' +
-  'un pronóstico para que pueda usarlo en el chat.';
+  'Todavía no hay ningún pronóstico generado para tu negocio, así que no ' +
+  'puedo responder preguntas sobre el futuro. Genera un pronóstico desde ' +
+  'la lista de compras para que pueda usarlo en el chat.';
 
 /**
  * Postgres SQLSTATE for `query_canceled` — raised when our own

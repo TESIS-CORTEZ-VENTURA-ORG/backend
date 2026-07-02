@@ -806,9 +806,7 @@ describe('Chat IA — E09 (e2e)', () => {
         expect(body.data.kind).toBe('future');
         expect(body.data.forecast).toBeUndefined();
         expect(body.data.sql).toBe('');
-        expect(body.data.answer).toContain(
-          'Todavía no generé ningún pronóstico',
-        );
+        expect(body.data.answer).toContain('Todavía no hay ningún pronóstico');
 
         const runs = await admin.forecastRun.count({
           where: {

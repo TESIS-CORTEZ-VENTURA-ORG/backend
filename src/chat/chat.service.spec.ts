@@ -251,7 +251,7 @@ describe('ChatService — LOTE B3: clasificación de intención', () => {
     expect(forecasting.getForecastForRange).toHaveBeenCalledTimes(1);
     expect(result.kind).toBe('future');
     expect(result.forecast).toBeUndefined();
-    expect(result.answer).toContain('Todavía no generé ningún pronóstico');
+    expect(result.answer).toContain('Todavía no hay ningún pronóstico');
   });
 
   it('future with a run but the range is OUTSIDE the forecasted horizon', async () => {

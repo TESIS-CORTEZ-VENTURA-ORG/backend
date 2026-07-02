@@ -733,7 +733,7 @@ export class ForecastingService {
               body:
                 `El stock de ${item.name} no alcanza para cubrir la demanda ` +
                 `proyectada de los próximos ${horizon} días${driverSuffix} — ` +
-                `considerá pedir ${item.suggestedQty} ${item.unit}.`,
+                `considera pedir ${item.suggestedQty} ${item.unit}.`,
               data: {
                 ingredientId: item.ingredientId,
                 horizon,
@@ -756,7 +756,7 @@ export class ForecastingService {
           title: `${plan.totalCount} insumos no cubren los próximos ${horizon} días`,
           body:
             `${names} y ${plan.extraCount} más no alcanzan para cubrir la ` +
-            `demanda proyectada${driverSuffix} — revisá las sugerencias de compra.`,
+            `demanda proyectada${driverSuffix} — revisa las sugerencias de compra.`,
           data: {
             ingredientIds: result.suggestions.map((s) => s.ingredientId),
             horizon,
