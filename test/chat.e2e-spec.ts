@@ -38,7 +38,7 @@ if (!adminUrl) throw new Error('DATABASE_URL_ADMIN not set (see .env)');
 const TRUNCATE = `
   TRUNCATE TABLE
     "sales_history","order_items","orders","menu_items","recipes",
-    "menu_categories","audit_logs","refresh_tokens","users","tenants"
+    "menu_categories","ingredients","audit_logs","refresh_tokens","users","tenants"
   CASCADE
 `;
 
@@ -186,6 +186,46 @@ describe('Chat IA — E09 (e2e)', () => {
           qty: 4,
           unitPrice: 25,
           total: 100,
+        },
+      ],
+    });
+
+    // Seed tenant A's ingredients (E09 bugfix — HU-05-10 low-stock scenario).
+    // "Pulpo" and "Conchas de abanico" are BELOW their reorder threshold
+    // (stock <= min_stock); "Cebolla roja" is comfortably stocked. This
+    // reproduces the demo data shape behind the "¿qué insumos tienen stock
+    // bajo?" ticket (2 critical ingredients expected in the answer).
+    await admin.ingredient.createMany({
+      data: [
+        {
+          tenantId: tenantA.id,
+          sku: 'PUL-001',
+          name: 'Pulpo',
+          type: 'insumo',
+          unit: 'kg',
+          unitCost: 45,
+          stock: 1.5,
+          minStock: 5,
+        },
+        {
+          tenantId: tenantA.id,
+          sku: 'CON-001',
+          name: 'Conchas de abanico',
+          type: 'insumo',
+          unit: 'kg',
+          unitCost: 38,
+          stock: 0.8,
+          minStock: 3,
+        },
+        {
+          tenantId: tenantA.id,
+          sku: 'CEB-001',
+          name: 'Cebolla roja',
+          type: 'insumo',
+          unit: 'kg',
+          unitCost: 3.5,
+          stock: 20,
+          minStock: 5,
         },
       ],
     });
@@ -489,6 +529,68 @@ describe('Chat IA — E09 (e2e)', () => {
       const grandTotal = nums.reduce((a, b) => a + b, 0);
       // 9 total qty + revenue values from tenant A only; 999 would skew this
       expect(grandTotal).toBeLessThan(500);
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // 5. Execution-time failure degradation (bugfix 2026-07-02)
+  //
+  // Reproduces the production incident: "¿Qué insumos están por agotarse?"
+  // returned a raw 500 because the LLM (guided by a stale schema_context)
+  // generated SQL referencing `ingredients.current_cost`, a column that does
+  // not exist (Postgres 42703). The validator cannot catch this — it only
+  // checks table allowlisting/DDL, not column existence — so the execution
+  // layer itself must degrade gracefully instead of leaking an unhandled 500.
+  // --------------------------------------------------------------------------
+
+  describe('execution-time failure degradation (never a raw 500)', () => {
+    it('undefined column at execution time → 502, not 500 (exact prod repro)', async () => {
+      const res = await queryWithSql(
+        'SELECT i.current_cost FROM ingredients i LIMIT 200',
+        ownerToken,
+      );
+      expect(res.status).toBe(502);
+      expect(res.status).not.toBe(500);
+    });
+
+    it('undefined column on a different whitelisted table → 502, not 500', async () => {
+      // kitchen_stations IS in the allowlist (validator rule 8 passes), but
+      // this column never existed — the validator has no way to catch a
+      // per-column hallucination, only the DB execution layer can.
+      const res = await queryWithSql(
+        'SELECT nonexistent_col FROM kitchen_stations LIMIT 5',
+        ownerToken,
+      );
+      expect(res.status).toBe(502);
+      expect(res.status).not.toBe(500);
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // 6. Low-stock query against the REAL ingredients schema (bugfix 2026-07-02)
+  //
+  // Reproduces the second symptom: "¿qué insumos tienen stock bajo?" answered
+  // "no hay" even though 2 ingredients were below their reorder threshold.
+  // The root cause was the schema_context omitting ingredients.stock/
+  // min_stock, forcing the LLM to (wrongly) reconstruct stock from
+  // inventory_movements. This suite proves the real columns are queryable
+  // and RLS-isolated once the schema_context/validator allow the correct SQL.
+  // --------------------------------------------------------------------------
+
+  describe('low-stock query against real ingredients.stock/min_stock', () => {
+    it('returns exactly the 2 ingredients below their reorder threshold', async () => {
+      const res = await queryWithSql(
+        'SELECT name, stock, min_stock FROM ingredients ' +
+          'WHERE stock <= min_stock ORDER BY name LIMIT 200',
+        ownerToken,
+      );
+      expect(res.status).toBe(200);
+
+      const body = chatResponseSchema.parse(res.body);
+      const names = body.data.rows.map((r) => String(r[0]));
+
+      expect(names).toEqual(['Conchas de abanico', 'Pulpo']);
+      expect(names).not.toContain('Cebolla roja');
     });
   });
 });

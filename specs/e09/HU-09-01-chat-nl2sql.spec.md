@@ -3,7 +3,7 @@
 **Épica:** E09 — Chat IA (`chat-orchestrator`)
 **HU:** HU-09-01 · Consulta analítica en lenguaje natural
 **Prioridad:** MUST · Sprint 5
-**Actualizado:** 2026-07-01
+**Actualizado:** 2026-07-02
 
 ---
 
@@ -40,17 +40,35 @@ core-ai NO tiene acceso a la base de datos de negocio.
 
 ## 3. Requisitos funcionales (EARS)
 
-| ID  | Requisito                                                                                                                                             |
-| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| R1  | El sistema DEBE aceptar `POST /api/chat/query { question: string }` con JWT válido y rol `owner` o `manager`.                                         |
-| R2  | El sistema DEBE enviar la pregunta + schema_context curado a `core-ai POST /chat/nl2sql` y recibir un SQL.                                            |
-| R3  | El sistema DEBE pasar el SQL por el validador de 9 reglas antes de ejecutarlo. Si falla, DEBE responder 400 con mensaje amigable y NO ejecutar nada.  |
-| R4  | El sistema DEBE ejecutar el SQL válido dentro de `runInTenant` (RLS FORCE) con `SET LOCAL statement_timeout = '5000'`.                                |
-| R5  | El sistema DEBE intentar obtener una respuesta humanizada de `core-ai POST /chat/answer`; si falla, el endpoint responde de todas formas (degradado). |
-| R6  | El sistema DEBE devolver `{ answer, sql, columns, rows, provider, model }` en el envelope `ApiResponse<T>`.                                           |
-| R7  | El sistema DEBE rechazar `staff` con 403 (`read Report` requerido).                                                                                   |
-| R8  | El sistema DEBE rechazar requests sin token con 401.                                                                                                  |
-| R9  | Los `rows` NO deben contener datos de otro tenant aunque el SQL sea genérico (RLS FORCE garantiza el aislamiento).                                    |
+| ID  | Requisito                                                                                                                                                                                                                                     |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R1  | El sistema DEBE aceptar `POST /api/chat/query { question: string }` con JWT válido y rol `owner` o `manager`.                                                                                                                                 |
+| R2  | El sistema DEBE enviar la pregunta + schema_context curado a `core-ai POST /chat/nl2sql` y recibir un SQL.                                                                                                                                    |
+| R3  | El sistema DEBE pasar el SQL por el validador de 9 reglas antes de ejecutarlo. Si falla, DEBE responder 400 con mensaje amigable y NO ejecutar nada.                                                                                          |
+| R4  | El sistema DEBE ejecutar el SQL válido dentro de `runInTenant` (RLS FORCE) con `SET LOCAL statement_timeout = '5000'`.                                                                                                                        |
+| R5  | El sistema DEBE intentar obtener una respuesta humanizada de `core-ai POST /chat/answer`; si falla, el endpoint responde de todas formas (degradado).                                                                                         |
+| R6  | El sistema DEBE devolver `{ answer, sql, columns, rows, provider, model }` en el envelope `ApiResponse<T>`.                                                                                                                                   |
+| R7  | El sistema DEBE rechazar `staff` con 403 (`read Report` requerido).                                                                                                                                                                           |
+| R8  | El sistema DEBE rechazar requests sin token con 401.                                                                                                                                                                                          |
+| R9  | Los `rows` NO deben contener datos de otro tenant aunque el SQL sea genérico (RLS FORCE garantiza el aislamiento).                                                                                                                            |
+| R10 | Si el SQL VALIDADO falla al EJECUTARSE (columna/tabla inexistente, timeout, etc.), el sistema DEBE responder con un error controlado (502 si es un problema del SQL generado, 504 si excedió `statement_timeout`) — NUNCA un 500 sin manejar. |
+
+---
+
+## 3.1 Incidente 2026-07-02 — bug fix (post-mortem breve)
+
+**Síntoma 1:** `POST /api/chat/query { "question": "¿Qué insumos están por agotarse?" }` devolvía `500 Internal server error`.
+
+**Causa raíz:** el `schema_context` curado (`src/chat/schema-context.ts`) describía columnas de `ingredients` que **no existen** en el schema real (`current_cost`, `unit_id`, `category_id`, `is_active`) y **omitía** las columnas reales `stock`/`min_stock`. El LLM generó `SELECT i.current_cost FROM ingredients i ...`, que pasó el validador de 9 reglas (solo valida sintaxis/tablas, no columnas) pero falló en Postgres con `42703 column i.current_cost does not exist`. El error de `$queryRawUnsafe` no estaba envuelto en try/catch → excepción sin manejar → 500 genérico.
+
+**Síntoma 2:** "¿qué insumos tienen stock bajo?" respondía "no hay" pese a existir 2 insumos críticos (Pulpo, Conchas de abanico) en los datos demo.
+
+**Causa raíz:** al no tener `stock`/`min_stock` disponibles en el `schema_context`, el LLM reconstruía el stock desde `inventory_movements` asumiendo `type IN ('in','out')` — un enum que no existe (el real es `purchase|sale|waste|adjustment|count` con `qty` como delta firmado). El `CASE WHEN` nunca matcheaba → balance siempre 0 para todos los insumos → falso negativo.
+
+**Fix:**
+
+1. `schema-context.ts` reescrito para reflejar EXACTAMENTE las columnas reales de `prisma/schema.prisma` (no solo `ingredients` — se auditaron y corrigieron las 24 tablas ya documentadas: `orders`, `payments`, `menu_categories`, `recipes`, `recipe_items`, `inventory_movements`, `purchase_orders`, `purchase_order_items`, `overhead_costs`, `costing_closes`, `forecast_runs`, `suppliers`, `units_of_measure`, `categories`, `zones`, `dining_tables`, `cash_closes` tenían el mismo tipo de drift).
+2. `ChatService.query` (Paso 3) ahora envuelve la ejecución en `try/catch` y clasifica el error: SQLSTATE `57014` (timeout) → 504; cualquier otro fallo de ejecución → 502 (R10). El mensaje al cliente es genérico y no filtra detalle interno, igual que el rechazo del validador (R3).
 
 ---
 
@@ -145,6 +163,30 @@ Feature: Chat IA — consulta analítica Text-to-SQL (HU-09-01)
     When consulta "¿cuáles son mis platos más vendidos?"
     Then las rows NO contienen "Ajeno" ni qty=999
     And las rows SÍ contienen "Lomo Saltado"
+
+  # --- R10 · degradación controlada en fallos de EJECUCIÓN (bugfix 2026-07-02) ---
+
+  Scenario: Ejecución — columna inexistente en SQL validado → 502, nunca 500
+    Given el usuario es owner
+    And core-ai retornó el SQL "SELECT i.current_cost FROM ingredients i LIMIT 200"
+    And ese SQL PASA el validador de 9 reglas (tabla permitida, sin DDL/DML)
+    When Postgres rechaza la ejecución con 42703 (column does not exist)
+    Then el endpoint responde 502 (Bad Gateway), nunca 500
+    And el mensaje es genérico, sin detalle interno del error de Postgres
+
+  Scenario: Ejecución — timeout del statement_timeout → 504
+    Given el usuario es owner
+    And el SQL validado excede el `SET LOCAL statement_timeout = '5000'`
+    When Postgres cancela la consulta con SQLSTATE 57014
+    Then el endpoint responde 504 (Gateway Timeout), nunca 500
+
+  Scenario: Stock bajo — ingredients.stock/min_stock son la fuente de verdad
+    Given el tenant "Motif" tiene el insumo "Pulpo" con stock=1.5 y min_stock=5
+    And tiene el insumo "Cebolla roja" con stock=20 y min_stock=5
+    And core-ai retornó "SELECT name, stock, min_stock FROM ingredients WHERE stock <= min_stock"
+    When el usuario consulta "¿qué insumos tienen stock bajo?"
+    Then las rows contienen "Pulpo"
+    And las rows NO contienen "Cebolla roja"
 ```
 
 ---
@@ -180,7 +222,7 @@ Content-Type: application/json
 }
 ```
 
-### Response 400 (SQL inválido)
+### Response 400 (SQL inválido — falla el VALIDADOR)
 
 ```json
 {
@@ -192,15 +234,38 @@ Content-Type: application/json
 }
 ```
 
+### Response 502 (SQL válido mas no EJECUTABLE contra el schema real)
+
+```json
+{
+  "statusCode": 502,
+  "message": "No pude ejecutar la consulta que generé para tu pregunta. Probá reformularla de otra manera.",
+  "error": "Bad Gateway"
+}
+```
+
+### Response 504 (excedió `statement_timeout`)
+
+```json
+{
+  "statusCode": 504,
+  "message": "La consulta tardó demasiado en responder. Probá acotar el rango de fechas o ser más específico.",
+  "error": "Gateway Timeout"
+}
+```
+
 ---
 
 ## 9. Evidencia de trazabilidad (ABET SO7)
 
-| Requisito           | Test                           | Archivo                                                         |
-| ------------------- | ------------------------------ | --------------------------------------------------------------- |
-| R1 (happy path)     | `owner gets answer`            | `test/chat.e2e-spec.ts`                                         |
-| R3 (validator gate) | todos los security tests       | `src/chat/sql-validator.util.spec.ts` + `test/chat.e2e-spec.ts` |
-| R4 (RLS FORCE)      | `RLS: tenant A no ve tenant B` | `test/chat.e2e-spec.ts`                                         |
-| R7 (staff 403)      | `RBAC: staff 403`              | `test/chat.e2e-spec.ts`                                         |
-| R8 (401 sin token)  | `no token 401`                 | `test/chat.e2e-spec.ts`                                         |
-| R9 (RLS cross-read) | `tenant isolation`             | `test/chat.e2e-spec.ts`                                         |
+| Requisito                       | Test                                                      | Archivo                                                         |
+| ------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------- |
+| R1 (happy path)                 | `owner gets answer`                                       | `test/chat.e2e-spec.ts`                                         |
+| R3 (validator gate)             | todos los security tests                                  | `src/chat/sql-validator.util.spec.ts` + `test/chat.e2e-spec.ts` |
+| R4 (RLS FORCE)                  | `RLS: tenant A no ve tenant B`                            | `test/chat.e2e-spec.ts`                                         |
+| R7 (staff 403)                  | `RBAC: staff 403`                                         | `test/chat.e2e-spec.ts`                                         |
+| R8 (401 sin token)              | `no token 401`                                            | `test/chat.e2e-spec.ts`                                         |
+| R9 (RLS cross-read)             | `tenant isolation`                                        | `test/chat.e2e-spec.ts`                                         |
+| R10 (502 en fallo de ejecución) | `execution-time failure degradation (never a raw 500)`    | `test/chat.e2e-spec.ts` + `src/chat/chat.service.spec.ts`       |
+| R10 (504 en timeout)            | `statement_timeout (57014) → 504 GatewayTimeoutException` | `src/chat/chat.service.spec.ts`                                 |
+| schema_context ↔ schema real    | regression suite                                          | `src/chat/schema-context.spec.ts`                               |
