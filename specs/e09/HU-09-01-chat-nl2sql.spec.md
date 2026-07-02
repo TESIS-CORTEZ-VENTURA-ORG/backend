@@ -40,18 +40,45 @@ core-ai NO tiene acceso a la base de datos de negocio.
 
 ## 3. Requisitos funcionales (EARS)
 
-| ID  | Requisito                                                                                                                                                                                                                                     |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| R1  | El sistema DEBE aceptar `POST /api/chat/query { question: string }` con JWT válido y rol `owner` o `manager`.                                                                                                                                 |
-| R2  | El sistema DEBE enviar la pregunta + schema_context curado a `core-ai POST /chat/nl2sql` y recibir un SQL.                                                                                                                                    |
-| R3  | El sistema DEBE pasar el SQL por el validador de 9 reglas antes de ejecutarlo. Si falla, DEBE responder 400 con mensaje amigable y NO ejecutar nada.                                                                                          |
-| R4  | El sistema DEBE ejecutar el SQL válido dentro de `runInTenant` (RLS FORCE) con `SET LOCAL statement_timeout = '5000'`.                                                                                                                        |
-| R5  | El sistema DEBE intentar obtener una respuesta humanizada de `core-ai POST /chat/answer`; si falla, el endpoint responde de todas formas (degradado).                                                                                         |
-| R6  | El sistema DEBE devolver `{ answer, sql, columns, rows, provider, model }` en el envelope `ApiResponse<T>`.                                                                                                                                   |
-| R7  | El sistema DEBE rechazar `staff` con 403 (`read Report` requerido).                                                                                                                                                                           |
-| R8  | El sistema DEBE rechazar requests sin token con 401.                                                                                                                                                                                          |
-| R9  | Los `rows` NO deben contener datos de otro tenant aunque el SQL sea genérico (RLS FORCE garantiza el aislamiento).                                                                                                                            |
-| R10 | Si el SQL VALIDADO falla al EJECUTARSE (columna/tabla inexistente, timeout, etc.), el sistema DEBE responder con un error controlado (502 si es un problema del SQL generado, 504 si excedió `statement_timeout`) — NUNCA un 500 sin manejar. |
+| ID  | Requisito                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R1  | El sistema DEBE aceptar `POST /api/chat/query { question: string }` con JWT válido y rol `owner` o `manager`.                                                                                                                                                                                                                                                                                                                                         |
+| R2  | El sistema DEBE enviar la pregunta + schema_context curado a `core-ai POST /chat/nl2sql` y recibir un SQL.                                                                                                                                                                                                                                                                                                                                            |
+| R3  | El sistema DEBE pasar el SQL por el validador de 9 reglas antes de ejecutarlo. Si falla, DEBE responder 400 con mensaje amigable y NO ejecutar nada.                                                                                                                                                                                                                                                                                                  |
+| R4  | El sistema DEBE ejecutar el SQL válido dentro de `runInTenant` (RLS FORCE) con `SET LOCAL statement_timeout = '5000'`.                                                                                                                                                                                                                                                                                                                                |
+| R5  | El sistema DEBE intentar obtener una respuesta humanizada de `core-ai POST /chat/answer`; si falla, el endpoint responde de todas formas (degradado).                                                                                                                                                                                                                                                                                                 |
+| R6  | El sistema DEBE devolver `{ answer, sql, columns, rows, provider, model }` en el envelope `ApiResponse<T>`.                                                                                                                                                                                                                                                                                                                                           |
+| R7  | El sistema DEBE rechazar `staff` con 403 (`read Report` requerido).                                                                                                                                                                                                                                                                                                                                                                                   |
+| R8  | El sistema DEBE rechazar requests sin token con 401.                                                                                                                                                                                                                                                                                                                                                                                                  |
+| R9  | Los `rows` NO deben contener datos de otro tenant aunque el SQL sea genérico (RLS FORCE garantiza el aislamiento).                                                                                                                                                                                                                                                                                                                                    |
+| R10 | Si el SQL VALIDADO falla al EJECUTARSE (columna/tabla inexistente, timeout, etc.), el sistema DEBE responder con un error controlado (502 si es un problema del SQL generado, 504 si excedió `statement_timeout`) — NUNCA un 500 sin manejar.                                                                                                                                                                                                         |
+| R11 | El sistema DEBE clasificar la pregunta (`historical` \| `future` \| `out_of_domain` \| `ambiguous`) ANTES de decidir si llama a core-ai. `historical` es el único caso que reutiliza el flujo R1-R10 sin cambios.                                                                                                                                                                                                                                     |
+| R12 | Si la pregunta es `future`, el sistema DEBE responder con los `points`/`drivers` de la última `ForecastRun` `completed` (scope=total) dentro del rango preguntado, con un disclaimer explícito ("proyección del modelo, no venta confirmada") — DEBE NO generar SQL. Sin corrida completada, o con el rango fuera del horizonte pronosticado, DEBE explicarlo y sugerir generar/ampliar el pronóstico — DEBE NO disparar una corrida automáticamente. |
+| R13 | Si la pregunta es `out_of_domain`, el sistema DEBE rechazarla con un mensaje fijo — DEBE NO llamar a core-ai ni ejecutar SQL.                                                                                                                                                                                                                                                                                                                         |
+| R14 | Si la pregunta es `ambiguous`, el sistema DEBE pedir precisión ofreciendo 2-3 preguntas concretas de ejemplo — DEBE NO llamar a core-ai ni ejecutar SQL ni volcar filas.                                                                                                                                                                                                                                                                              |
+| R15 | La clasificación NUNCA debe permitir saltear el validador de 9 reglas (R3) cuando SÍ se genera SQL (`historical`) — los guardrails existentes (columna `salary`, RLS, timeout) permanecen intactos.                                                                                                                                                                                                                                                   |
+
+---
+
+## 3.2 Refinamiento LOTE B3 (2026-07-02) — preguntas sobre el futuro + rechazo elegante fuera de dominio (QA-08)
+
+**Motivación:** el chat E09 solo respondía sobre el pasado (NL→SQL contra `sales_history`). QA-08 reportó dos síntomas: (1) preguntas fuera de dominio ("¿quién ganó el mundial?") o ambiguas ("¿cómo va todo?") producían un `SELECT` masivo y un volcado de cientos de UUIDs antes de admitir que no había información relevante; (2) el chat no sabía responder "¿cuánto voy a vender este fin de semana?" — una pregunta sobre el FUTURO, que NUNCA tiene respuesta posible contra `sales_history` (no hay "ventas futuras" ahí).
+
+**Decisión de clasificación — heurística determinística, NO un paso de LLM** (ver JSDoc completo en `src/chat/intent-classifier.util.ts`):
+
+1. **Restricción de alcance:** este lote NO puede tocar `team-core-ai`. Los únicos endpoints de chat en core-ai son `/chat/nl2sql` (traduce NL→SQL contra el schema real) y `/chat/answer` (narra filas) — ninguno es un clasificador, y reutilizar `/chat/nl2sql` para clasificar exigiría cambiar su contrato (cambio en core-ai, fuera de alcance).
+2. **Postura de seguridad del repo:** `sql-validator.util.ts` ya documenta la filosofía "conservative / reject-on-doubt" y "defence-in-depth, ningún layer solo". Un gate determinístico ANTES de cualquier llamada a LLM es una garantía más dura que confiarle la clasificación al mismo LLM que ya sabemos que alucina columnas/tablas (ver el incidente §3.1). Una función determinística es exhaustivamente unit-testeable (ver `intent-classifier.util.spec.ts`); un paso de clasificación por LLM no lo es de la misma forma.
+3. **Costo/latencia:** evita un segundo round-trip HTTP (20s de timeout) por cada pregunta, incluyendo el caso común (`historical`, sin cambios).
+
+Trade-off aceptado: la heurística (keywords de dominio + frases temporales en español + verbo "ir a" + fechas explícitas) es imperfecta para frases abiertas no contempladas — mismo trade-off que ya asume `validateSql` con sus regex de extracción de tablas/columnas.
+
+**Arquitectura:** `ChatModule` importa `ForecastingModule` (ya exporta `ForecastingService`) y usa `ForecastingService.getForecastForRange(tenantId, from, to)` — mismo patrón de import directo de servicio que `ForecastingModule → NotificationsModule` (Lote B1); sin bus de eventos en el repo, sin ciclo (`forecasting` no conoce `chat`).
+
+**Resolución de rango temporal** (`src/chat/lima-date.util.ts` + `intent-classifier.util.ts`): reconoce "mañana", "pasado mañana", "este fin de semana" (próximo sáb-dom, incluye hoy si hoy ya es sábado), "esta semana" (hoy→domingo), "la próxima semana" (próximo lun-dom), "este mes", "el próximo mes" (con rollover de año en diciembre). Sin frase explícita pero con señal de futuro (p. ej. "¿cuánto vamos a vender?"), usa una ventana por defecto de 7 días desde mañana.
+
+**Shape de respuesta (aditivo — LOTE F2b, frontend):** `kind: 'historical'|'future'|'out_of_domain'|'ambiguous'` siempre presente; `forecast: { runId, range:{from,to,label}, totalYhat, totalLo, totalHi, points, drivers }` presente SOLO en `kind:'future'` con datos disponibles (ausente si `needsForecast`/fuera de horizonte — el mensaje explicativo va en `answer`). Ver §8 para el ejemplo completo. El adapter actual del frontend (`team-frontend/server/api/chat/query.post.ts` → `use-chat.ts`) sigue funcionando sin cambios: solo lee `answer/sql/columns/rows/provider/model` y construye la tabla cuando `columns.length > 0` (para `future`/`out_of_domain`/`ambiguous`, `columns` viaja vacío → no se renderiza tabla).
+
+**Guardrails existentes — verificados intactos:** el validador de 9 reglas, RLS FORCE, `statement_timeout`, y el bloqueo de la columna `salary` NO se tocaron; `historical` sigue siendo exactamente el flujo R1-R10 sin modificar (`ChatService.answerHistorical`, antes `query()`). Tests de regresión en `chat.service.spec.ts` y `chat.e2e-spec.ts` (incluye "¿qué insumos están por agotarse?" e intento explícito de `SELECT salary` vía SQL mockeado).
 
 ---
 
@@ -187,6 +214,55 @@ Feature: Chat IA — consulta analítica Text-to-SQL (HU-09-01)
     When el usuario consulta "¿qué insumos tienen stock bajo?"
     Then las rows contienen "Pulpo"
     And las rows NO contienen "Cebolla roja"
+
+  # --- LOTE B3 (2026-07-02) · preguntas sobre el futuro + rechazo QA-08 ---
+
+  Scenario: Futuro — con corrida completada, responde la proyección real + drivers
+    Given el tenant "Motif" tiene una ForecastRun completada (scope=total)
+    And esa corrida tiene puntos para el próximo sábado y domingo
+    And tiene un driver "Quincena del 15" el domingo
+    When el usuario owner consulta "¿cuánto voy a vender este fin de semana?"
+    Then el sistema responde 200 con kind="future"
+    And sql="" y columns=[] y rows=[] (no se generó SQL)
+    And answer incluye el total proyectado y el driver "Quincena del 15"
+    And answer incluye el disclaimer "proyección del modelo, no una venta confirmada"
+    And forecast.points contiene exactamente los puntos de sáb+dom
+
+  Scenario: Futuro — sin ninguna corrida completada, explica sin auto-disparar una corrida
+    Given el tenant "Motif Sin Pronóstico" no tiene ninguna ForecastRun completada
+    When el usuario owner consulta "¿cuánto voy a vender este fin de semana?"
+    Then el sistema responde 200 con kind="future"
+    And answer explica que hace falta generar un pronóstico primero
+    And forecast está ausente
+    And NO se crea ninguna ForecastRun nueva (sin side-effect)
+
+  Scenario: Futuro — rango fuera del horizonte pronosticado
+    Given el tenant "Motif" tiene una ForecastRun completada con horizonte de 14 días
+    When el usuario owner consulta "¿cuánto voy a vender el próximo mes?" (fuera del horizonte)
+    Then el sistema responde 200 con kind="future"
+    And answer explica que el rango cae fuera del pronóstico y sugiere ampliarlo
+    And forecast está ausente
+
+  Scenario: Fuera de dominio — QA-08, sin volcado de filas
+    Given el usuario es owner
+    When consulta "¿quién ganó el mundial?"
+    Then el sistema responde 200 con kind="out_of_domain"
+    And sql="" y rows=[] (NUNCA se llama a core-ai/nl2sql)
+    And answer es el rechazo fijo ("Solo puedo responder sobre los datos de tu negocio...")
+
+  Scenario: Ambigua — QA-08, pide precisión con ejemplos concretos
+    Given el usuario es owner
+    When consulta "¿cómo va todo?"
+    Then el sistema responde 200 con kind="ambiguous"
+    And sql="" y rows=[] (NUNCA se llama a core-ai/nl2sql)
+    And answer ofrece 2-3 preguntas concretas de ejemplo
+
+  Scenario: Regresión — la clasificación no rompe preguntas históricas ni guardrails
+    Given el usuario es owner
+    When consulta "¿qué insumos están por agotarse?"
+    Then el sistema clasifica kind="historical" y ejecuta el flujo nl2sql original
+    When consulta "¿cuánto le pago a cada empleado?" y core-ai intenta "SELECT salary FROM employees"
+    Then el validador de 9 reglas sigue rechazando la columna salary (regla 7, 400)
 ```
 
 ---
@@ -203,7 +279,7 @@ Content-Type: application/json
 { "question": "¿cuál fue mi plato más rentable en junio?" }
 ```
 
-### Response 200
+### Response 200 (`kind: "historical"` — flujo original R1-R10, sin cambios)
 
 ```json
 {
@@ -217,10 +293,75 @@ Content-Type: application/json
       ["Ceviche", "120.00"]
     ],
     "provider": "mock",
-    "model": "mock-v1"
+    "model": "mock-v1",
+    "kind": "historical"
   }
 }
 ```
+
+### Response 200 (`kind: "future"` — LOTE B3, con corrida completada en rango)
+
+```json
+{
+  "success": true,
+  "data": {
+    "answer": "Se proyectan S/ 118.00 para este fin de semana (banda estimada S/ 88.00–S/ 148.00). Nota: esto es una proyección del modelo, no una venta confirmada.",
+    "sql": "",
+    "columns": [],
+    "rows": [],
+    "provider": "system",
+    "model": "forecast-run",
+    "kind": "future",
+    "forecast": {
+      "runId": "8d6dafbe-b4b7-4144-a6a7-823ab8e10931",
+      "range": {
+        "from": "2026-07-04",
+        "to": "2026-07-05",
+        "label": "este fin de semana"
+      },
+      "totalYhat": 118,
+      "totalLo": 88,
+      "totalHi": 148,
+      "points": [
+        {
+          "target_date": "2026-07-04",
+          "yhat": 59,
+          "yhat_lo": 44,
+          "yhat_hi": 74
+        },
+        {
+          "target_date": "2026-07-05",
+          "yhat": 59,
+          "yhat_lo": 44,
+          "yhat_hi": 74
+        }
+      ],
+      "drivers": []
+    }
+  }
+}
+```
+
+`forecast` está AUSENTE (solo `answer` explica) cuando `needsForecast` (sin corrida completada) o el rango cae fuera del horizonte pronosticado — nunca se dispara una corrida nueva automáticamente en ninguno de los dos casos.
+
+### Response 200 (`kind: "out_of_domain"` / `kind: "ambiguous"` — LOTE B3, QA-08)
+
+```json
+{
+  "success": true,
+  "data": {
+    "answer": "Solo puedo responder sobre los datos de tu negocio (ventas, insumos, recetas, empleados, pronósticos, etc.). Probá con una pregunta sobre tu restaurante.",
+    "sql": "",
+    "columns": [],
+    "rows": [],
+    "provider": "system",
+    "model": "intent-classifier",
+    "kind": "out_of_domain"
+  }
+}
+```
+
+`kind: "ambiguous"` tiene la misma forma; `answer` ofrece 2-3 preguntas concretas de ejemplo en vez del rechazo fijo. Ninguno de los dos casos llama a core-ai.
 
 ### Response 400 (SQL inválido — falla el VALIDADOR)
 
@@ -258,14 +399,21 @@ Content-Type: application/json
 
 ## 9. Evidencia de trazabilidad (ABET SO7)
 
-| Requisito                       | Test                                                      | Archivo                                                         |
-| ------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------- |
-| R1 (happy path)                 | `owner gets answer`                                       | `test/chat.e2e-spec.ts`                                         |
-| R3 (validator gate)             | todos los security tests                                  | `src/chat/sql-validator.util.spec.ts` + `test/chat.e2e-spec.ts` |
-| R4 (RLS FORCE)                  | `RLS: tenant A no ve tenant B`                            | `test/chat.e2e-spec.ts`                                         |
-| R7 (staff 403)                  | `RBAC: staff 403`                                         | `test/chat.e2e-spec.ts`                                         |
-| R8 (401 sin token)              | `no token 401`                                            | `test/chat.e2e-spec.ts`                                         |
-| R9 (RLS cross-read)             | `tenant isolation`                                        | `test/chat.e2e-spec.ts`                                         |
-| R10 (502 en fallo de ejecución) | `execution-time failure degradation (never a raw 500)`    | `test/chat.e2e-spec.ts` + `src/chat/chat.service.spec.ts`       |
-| R10 (504 en timeout)            | `statement_timeout (57014) → 504 GatewayTimeoutException` | `src/chat/chat.service.spec.ts`                                 |
-| schema_context ↔ schema real    | regression suite                                          | `src/chat/schema-context.spec.ts`                               |
+| Requisito                       | Test                                                        | Archivo                                                         |
+| ------------------------------- | ----------------------------------------------------------- | --------------------------------------------------------------- |
+| R1 (happy path)                 | `owner gets answer`                                         | `test/chat.e2e-spec.ts`                                         |
+| R3 (validator gate)             | todos los security tests                                    | `src/chat/sql-validator.util.spec.ts` + `test/chat.e2e-spec.ts` |
+| R4 (RLS FORCE)                  | `RLS: tenant A no ve tenant B`                              | `test/chat.e2e-spec.ts`                                         |
+| R7 (staff 403)                  | `RBAC: staff 403`                                           | `test/chat.e2e-spec.ts`                                         |
+| R8 (401 sin token)              | `no token 401`                                              | `test/chat.e2e-spec.ts`                                         |
+| R9 (RLS cross-read)             | `tenant isolation`                                          | `test/chat.e2e-spec.ts`                                         |
+| R10 (502 en fallo de ejecución) | `execution-time failure degradation (never a raw 500)`      | `test/chat.e2e-spec.ts` + `src/chat/chat.service.spec.ts`       |
+| R10 (504 en timeout)            | `statement_timeout (57014) → 504 GatewayTimeoutException`   | `src/chat/chat.service.spec.ts`                                 |
+| schema_context ↔ schema real    | regression suite                                            | `src/chat/schema-context.spec.ts`                               |
+| R11 (clasificación previa)      | toda la suite `classifyIntent`                              | `src/chat/intent-classifier.util.spec.ts` (21 casos)            |
+| R12 (future con datos)          | `"este fin de semana" devuelve la proyección real...`       | `test/chat.e2e-spec.ts` (LOTE B3) + `chat.service.spec.ts`      |
+| R12 (future needsForecast)      | `future WITHOUT a completed run...` / `sin ninguna corrida` | `chat.service.spec.ts` + `test/chat.e2e-spec.ts`                |
+| R12 (future outOfHorizon)       | `rango fuera del horizonte de la corrida...`                | `chat.service.spec.ts` + `test/chat.e2e-spec.ts`                |
+| R13 (out_of_domain, QA-08)      | `"¿quién ganó el mundial?" → rechazo elegante...`           | `chat.service.spec.ts` + `test/chat.e2e-spec.ts`                |
+| R14 (ambiguous, QA-08)          | `"¿cómo va todo?" → pide precisión...`                      | `chat.service.spec.ts` + `test/chat.e2e-spec.ts`                |
+| R15 (guardrails intactos)       | `regresión — preguntas históricas siguen igual`             | `test/chat.e2e-spec.ts` + `chat.service.spec.ts`                |

@@ -113,6 +113,37 @@ export interface ForecastValidationView {
   summary: ForecastValidation['summary'];
 }
 
+/**
+ * E09×E08 (chat futuro, LOTE B3) · Respuesta de {@link ForecastingService.getForecastForRange}.
+ * Usada por `ChatModule` (import directo del servicio — mismo patrón que
+ * `ForecastingModule → NotificationsModule`, ver `forecasting.module.ts`) para
+ * responder preguntas sobre el futuro SIN generar SQL: en `sales_history`
+ * jamás hay filas para una fecha futura, así que ese camino no tiene sentido
+ * para esta intención (a diferencia de `historical`, que sí pasa por nl2sql).
+ */
+export interface ForecastRangeAnswer {
+  /** `true` cuando el tenant todavía no tiene ninguna corrida `completed` (scope=total). */
+  needsForecast: boolean;
+  /** Corrida usada; `null` solo si `needsForecast`. */
+  runId: string | null;
+  /** `true` cuando SÍ hay una corrida, pero el rango pedido no se solapa con su horizonte. */
+  outOfHorizon: boolean;
+  /** Último día pronosticado por la corrida (para sugerirle al usuario un rango dentro del horizonte). `null` si `needsForecast`. */
+  horizonEnd: string | null;
+  /** `completedAt` de la corrida usada, ISO. `null` si `needsForecast`. */
+  generatedAt: string | null;
+  /** Puntos de la corrida que caen dentro de `[from,to]`, ordenados por fecha. */
+  points: ForecastPoint[];
+  /** Suma de `yhat` de `points`; `null` si no hay puntos en rango. */
+  totalYhat: number | null;
+  /** Suma de `yhat_lo` de `points`; `null` si no hay puntos en rango. */
+  totalLo: number | null;
+  /** Suma de `yhat_hi` de `points`; `null` si no hay puntos en rango. */
+  totalHi: number | null;
+  /** Drivers de la corrida que caen dentro de `[from,to]`, ordenados por fecha. */
+  drivers: ForecastDriver[];
+}
+
 /** Vista de una corrida persistida (lo que devuelven run/poll/predictions). */
 export interface ForecastRunView {
   id: string;
@@ -558,6 +589,103 @@ export class ForecastingService {
         contextStatus,
       };
     });
+  }
+
+  /**
+   * E09×E08 (chat futuro, LOTE B3) · Puntos + drivers de la última corrida
+   * `completed` (scope=total) que caen dentro de `[from,to]` (fechas
+   * 'YYYY-MM-DD', Lima). El chat usa esto para responder preguntas sobre el
+   * futuro SIN ejecutar SQL: no hay "ventas futuras" en `sales_history`, así
+   * que la única fuente de verdad posible es un pronóstico ya generado.
+   *
+   * Invariante de producto: NUNCA dispara una corrida nueva — si no hay
+   * ninguna completada (`needsForecast`) o el rango cae fuera del horizonte
+   * ya pronosticado (`outOfHorizon`), el llamador debe explicarlo y sugerir
+   * generar/ampliar el pronóstico manualmente (`POST /forecasting/run`), no
+   * auto-ejecutarlo — lanzar un forecast es una acción de gestión explícita
+   * (`manage Report`, ver `ForecastingController.run`), no un side-effect de
+   * una pregunta de chat.
+   *
+   * `tenant_id` SIEMPRE del JWT (pasado por el caller); lectura vía
+   * `runInTenant` (RLS FORCE).
+   */
+  async getForecastForRange(
+    tenantId: string,
+    from: string,
+    to: string,
+  ): Promise<ForecastRangeAnswer> {
+    const run = await this.prisma.runInTenant(tenantId, (tx) =>
+      tx.forecastRun.findFirst({
+        where: { status: 'completed', scope: 'total' },
+        orderBy: { completedAt: 'desc' },
+      }),
+    );
+
+    if (!run) {
+      return {
+        needsForecast: true,
+        runId: null,
+        outOfHorizon: false,
+        horizonEnd: null,
+        generatedAt: null,
+        points: [],
+        totalYhat: null,
+        totalLo: null,
+        totalHi: null,
+        drivers: [],
+      };
+    }
+
+    const allPoints = (run.points as unknown as ForecastPoint[] | null) ?? [];
+    const horizonEnd = allPoints.at(-1)?.target_date ?? null;
+    const generatedAt = run.completedAt ? run.completedAt.toISOString() : null;
+
+    const points = allPoints
+      .filter((p) => p.target_date >= from && p.target_date <= to)
+      .sort((a, b) => a.target_date.localeCompare(b.target_date));
+
+    if (points.length === 0) {
+      return {
+        needsForecast: false,
+        runId: run.id,
+        outOfHorizon: true,
+        horizonEnd,
+        generatedAt,
+        points: [],
+        totalYhat: null,
+        totalLo: null,
+        totalHi: null,
+        drivers: [],
+      };
+    }
+
+    const allDrivers =
+      (run.drivers as unknown as ForecastDriver[] | null) ?? [];
+    const drivers = allDrivers
+      .filter((d) => d.date >= from && d.date <= to)
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    let totalYhat = 0;
+    let totalLo = 0;
+    let totalHi = 0;
+    for (const p of points) {
+      totalYhat += p.yhat;
+      totalLo += p.yhat_lo;
+      totalHi += p.yhat_hi;
+    }
+
+    return {
+      needsForecast: false,
+      runId: run.id,
+      outOfHorizon: false,
+      horizonEnd,
+      generatedAt,
+      points,
+      totalYhat,
+      totalLo,
+      totalHi,
+      drivers,
+    };
   }
 
   /**

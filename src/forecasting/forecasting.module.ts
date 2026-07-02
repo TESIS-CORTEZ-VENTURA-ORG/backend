@@ -24,6 +24,11 @@ import { ForecastingService } from './forecasting.service';
  * directo del servicio exportado que usa `InventoryModule` para `low_stock`
  * (no hay bus de eventos en el repo; los módulos que se necesitan se importan
  * entre sí sin ciclos).
+ *
+ * `exports: [ForecastingService]` (LOTE B3): `ChatModule` importa este módulo
+ * para responder preguntas sobre el futuro con la última corrida completada
+ * (`getForecastForRange`) — mismo patrón de import directo de servicio, ahora
+ * en la dirección `chat → forecasting` (sin ciclo: `forecasting` no conoce `chat`).
  */
 @Module({
   imports: [
@@ -40,5 +45,6 @@ import { ForecastingService } from './forecasting.service';
     ForecastProcessor,
     ForecastScheduler,
   ],
+  exports: [ForecastingService],
 })
 export class ForecastingModule {}

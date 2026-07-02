@@ -7,11 +7,37 @@ import {
   type HttpException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { ForecastingService } from '../forecasting/forecasting.service';
 import { PrismaService } from '../platform/prisma/prisma.service';
 import { type ChatQueryResponse, type CoreAiAnswerRequest } from '../shared';
 import { CoreAiChatClient } from './core-ai-chat.client';
+import { classifyIntent, type ChatDateRange } from './intent-classifier.util';
+import { todayLima } from './lima-date.util';
 import { ANALYTICS_SCHEMA_CONTEXT } from './schema-context';
 import { validateSql, MAX_ROWS } from './sql-validator.util';
+
+/**
+ * LOTE B3 · Respuestas fijas para las intenciones que NUNCA llegan a core-ai
+ * (`out_of_domain`/`ambiguous`) — texto estático, no generado por LLM, porque
+ * la clasificación en sí ya decidió que no hay nada que preguntarle al modelo.
+ * `provider`/`model` reportan "system"/"intent-classifier" (en vez de mock/
+ * openai/etc.) para que la respuesta sea auditable igual que el resto del
+ * contrato (el frontend/QA puede distinguir "esto lo resolvió el LLM" de
+ * "esto lo resolvió el gate determinístico").
+ */
+const OUT_OF_DOMAIN_ANSWER =
+  'Solo puedo responder sobre los datos de tu negocio (ventas, insumos, ' +
+  'recetas, empleados, pronósticos, etc.). Probá con una pregunta sobre tu restaurante.';
+
+const AMBIGUOUS_ANSWER =
+  'Tu pregunta es un poco ambigua. ¿Podés ser más específico? Por ejemplo: ' +
+  '"¿cuáles fueron mis ventas de esta semana?", "¿qué insumos están por ' +
+  'agotarse?" o "¿cuánto voy a vender este fin de semana?".';
+
+const NEEDS_FORECAST_ANSWER =
+  'Todavía no generé ningún pronóstico para tu negocio, así que no puedo ' +
+  'responder preguntas sobre el futuro todavía. Andá a Forecasting y generá ' +
+  'un pronóstico para que pueda usarlo en el chat.';
 
 /**
  * Postgres SQLSTATE for `query_canceled` — raised when our own
@@ -47,10 +73,140 @@ export class ChatService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly coreAiChat: CoreAiChatClient,
+    private readonly forecasting: ForecastingService,
   ) {}
 
   /**
-   * Execute a natural-language analytics query for the given tenant.
+   * Answer a natural-language analytics question for the given tenant.
+   *
+   * LOTE B3 (preguntas sobre el futuro + rechazo elegante fuera de dominio):
+   * the question is classified BEFORE deciding whether to call core-ai at
+   * all (see `intent-classifier.util.ts` for the full design rationale).
+   *   - `future`        → answered from the latest completed `ForecastRun`
+   *                        (`ForecastingService.getForecastForRange`), no SQL.
+   *   - `out_of_domain` → rejected with a fixed message, no SQL, no LLM call.
+   *   - `ambiguous`     → asked to clarify (2-3 example questions), no SQL.
+   *   - `historical`    → the ORIGINAL flow, byte-for-byte unchanged below:
+   *       1. Call core-ai to translate the question into a SQL SELECT.
+   *       2. Run the SQL through the 9-rule validation hard gate.
+   *       3. Execute under runInTenant (RLS + statement_timeout).
+   *       4. Optionally call core-ai for a Spanish NL answer (non-fatal).
+   *
+   * @param tenantId  UUID from the JWT claim — never from request body.
+   * @param question  Natural-language question from the user.
+   */
+  async query(tenantId: string, question: string): Promise<ChatQueryResponse> {
+    const intent = classifyIntent(question, todayLima());
+
+    switch (intent.kind) {
+      case 'out_of_domain':
+        // Transparency: log WHY nothing was executed (mirrors the validator's
+        // own rejection logging) — helps QA/incident triage distinguish "the
+        // classifier rejected this" from "core-ai/the validator rejected it".
+        this.logger.log(
+          `Chat: pregunta clasificada fuera de dominio, no se generó SQL: "${question}"`,
+          { tenantId },
+        );
+        return this.staticResponse('out_of_domain', OUT_OF_DOMAIN_ANSWER);
+
+      case 'ambiguous':
+        return this.staticResponse('ambiguous', AMBIGUOUS_ANSWER);
+
+      case 'future':
+        return this.answerFuture(tenantId, intent.range);
+
+      case 'historical':
+      default:
+        return this.answerHistorical(tenantId, question);
+    }
+  }
+
+  /**
+   * LOTE B3 · Responde una pregunta sobre el futuro desde la última
+   * `ForecastRun` completada — NUNCA genera SQL (no hay "ventas futuras" en
+   * `sales_history`) y NUNCA dispara una corrida nueva (ver invariante en
+   * `ForecastingService.getForecastForRange`).
+   */
+  private async answerFuture(
+    tenantId: string,
+    range: ChatDateRange,
+  ): Promise<ChatQueryResponse> {
+    const result = await this.forecasting.getForecastForRange(
+      tenantId,
+      range.from,
+      range.to,
+    );
+
+    if (result.needsForecast) {
+      return this.staticResponse('future', NEEDS_FORECAST_ANSWER);
+    }
+
+    if (result.outOfHorizon) {
+      const horizonHint = result.horizonEnd
+        ? ` El pronóstico más reciente solo cubre hasta el ${result.horizonEnd}.`
+        : '';
+      return this.staticResponse(
+        'future',
+        `Tu pregunta cae fuera del rango que cubre el último pronóstico.${horizonHint} ` +
+          'Generá un nuevo pronóstico con un horizonte más amplio para poder responder eso.',
+      );
+    }
+
+    // Non-null by construction: outOfHorizon===false implies points.length > 0
+    // (see ForecastingService.getForecastForRange), so the sums were computed.
+    const totalYhat = result.totalYhat as number;
+    const totalLo = result.totalLo as number;
+    const totalHi = result.totalHi as number;
+
+    const driverText =
+      result.drivers.length > 0
+        ? ` Incluye el efecto de ${result.drivers.map((d) => d.label).join(', ')}.`
+        : '';
+
+    const answer =
+      `Se proyectan S/ ${totalYhat.toFixed(2)} para ${range.label} ` +
+      `(banda estimada S/ ${totalLo.toFixed(2)}–S/ ${totalHi.toFixed(2)}).` +
+      `${driverText} Nota: esto es una proyección del modelo, no una venta confirmada.`;
+
+    return {
+      answer,
+      sql: '',
+      columns: [],
+      rows: [],
+      provider: 'system',
+      model: 'forecast-run',
+      kind: 'future',
+      forecast: {
+        runId: result.runId as string,
+        range,
+        totalYhat,
+        totalLo,
+        totalHi,
+        points: result.points,
+        drivers: result.drivers,
+      },
+    };
+  }
+
+  /** LOTE B3 · Respuesta sin SQL/LLM (out_of_domain, ambiguous, o future sin datos). */
+  private staticResponse(
+    kind: 'out_of_domain' | 'ambiguous' | 'future',
+    answer: string,
+  ): ChatQueryResponse {
+    return {
+      answer,
+      sql: '',
+      columns: [],
+      rows: [],
+      provider: 'system',
+      model: 'intent-classifier',
+      kind,
+    };
+  }
+
+  /**
+   * Original Text-to-SQL flow (HU-09-01), UNCHANGED by LOTE B3 — only reached
+   * when `classifyIntent` returns `historical`.
    *
    * Flow:
    *  1. Call core-ai to translate the question into a SQL SELECT.
@@ -58,11 +214,11 @@ export class ChatService {
    *  3. Execute under runInTenant (RLS + statement_timeout).
    *  4. Optionally call core-ai for a Spanish NL answer (non-fatal).
    *  5. Return the full response in ApiResponse shape.
-   *
-   * @param tenantId  UUID from the JWT claim — never from request body.
-   * @param question  Natural-language question from the user.
    */
-  async query(tenantId: string, question: string): Promise<ChatQueryResponse> {
+  private async answerHistorical(
+    tenantId: string,
+    question: string,
+  ): Promise<ChatQueryResponse> {
     // --- Step 1: LLM generates SQL ---
     const nl2sqlResp = await this.coreAiChat.nl2sql({
       question,
@@ -134,6 +290,7 @@ export class ChatService {
       rows,
       provider: nl2sqlResp.provider,
       model: nl2sqlResp.model,
+      kind: 'historical',
     };
   }
 

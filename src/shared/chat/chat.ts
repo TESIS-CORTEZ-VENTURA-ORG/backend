@@ -1,4 +1,8 @@
 import { z } from 'zod';
+import {
+  forecastDriverSchema,
+  forecastPointSchema,
+} from '../forecasting/forecast';
 
 /**
  * E09 · Contrato del chat analítico Text-to-SQL (backend.md §8.2).
@@ -11,6 +15,12 @@ import { z } from 'zod';
  * Invariante de seguridad: tenant_id SIEMPRE proviene del JWT, NUNCA del
  * body de la pregunta. El SQL generado se valida antes de ejecutarse.
  * RLS FORCE provee una segunda capa independiente de la validación.
+ *
+ * Refinamiento LOTE B3 (preguntas sobre el futuro + rechazo fuera de dominio):
+ * `ChatService.query` clasifica la pregunta ANTES de decidir si genera SQL
+ * (ver `src/chat/intent-classifier.util.ts`). `kind`/`forecast` son ADITIVOS
+ * y opcionales — un cliente que solo lea `answer/sql/columns/rows` (el shape
+ * previo a este cambio) sigue funcionando sin cambios.
  */
 
 // ---------------------------------------------------------------------------
@@ -24,20 +34,71 @@ export const chatQuerySchema = z.object({
 });
 export type ChatQueryInput = z.infer<typeof chatQuerySchema>;
 
+/**
+ * LOTE B3 · Clasificación de la pregunta (ver `intent-classifier.util.ts`).
+ * `historical` es el flujo previo a este cambio (nl2sql normal) — se incluye
+ * explícitamente en toda respuesta nueva para que el frontend (F2b) pueda
+ * distinguir "tabla de resultados" de "proyección"/"rechazo" sin adivinar por
+ * `columns.length === 0`.
+ */
+export const chatQueryKindSchema = z.enum([
+  'historical',
+  'future',
+  'out_of_domain',
+  'ambiguous',
+]);
+export type ChatQueryKind = z.infer<typeof chatQueryKindSchema>;
+
+/** Rango de fechas (Lima) que el usuario preguntó, ya resuelto a fechas concretas. */
+export const chatDateRangeSchema = z.object({
+  from: z.iso.date(),
+  to: z.iso.date(),
+  /** Etiqueta en español lista para mostrar (p. ej. "este fin de semana"). */
+  label: z.string(),
+});
+export type ChatDateRange = z.infer<typeof chatDateRangeSchema>;
+
+/**
+ * LOTE B3 · Metadata estructurada de una respuesta `kind: 'future'` — la
+ * misma info que ya narra `answer` en texto plano, pero en forma consumible
+ * por el frontend (badges/gráfico) sin tener que parsear el string. Viaja
+ * SOLO cuando `kind === 'future'` y SÍ hubo una corrida completada con datos
+ * en el rango pedido (si `needsForecast`/fuera de horizonte, no hay `forecast`
+ * — el mensaje explicativo va en `answer`).
+ */
+export const chatForecastMetaSchema = z.object({
+  /** Corrida (`ForecastRun`) de la que salen los puntos — para trazabilidad/auditoría. */
+  runId: z.string().uuid(),
+  range: chatDateRangeSchema,
+  /** Suma de `yhat`/`yhat_lo`/`yhat_hi` de los puntos dentro del rango. */
+  totalYhat: z.number(),
+  totalLo: z.number(),
+  totalHi: z.number(),
+  /** Puntos día-a-día dentro del rango (para un gráfico, si el frontend lo quiere). */
+  points: z.array(forecastPointSchema),
+  /** Factores exógenos (feriados/quincena/clima) dentro del mismo rango. */
+  drivers: z.array(forecastDriverSchema),
+});
+export type ChatForecastMeta = z.infer<typeof chatForecastMetaSchema>;
+
 /** Respuesta del endpoint (dentro del sobre ApiResponse<T>). */
 export const chatQueryResponseSchema = z.object({
   /** Respuesta humanizada en lenguaje natural (o mensaje genérico de fallback). */
   answer: z.string(),
-  /** SQL ejecutado (post-validación, con LIMIT garantizado). */
+  /** SQL ejecutado (post-validación, con LIMIT garantizado). Vacío cuando no se generó SQL (future/out_of_domain/ambiguous). */
   sql: z.string(),
-  /** Nombres de columnas del resultado. */
+  /** Nombres de columnas del resultado. Vacío cuando no se generó SQL. */
   columns: z.array(z.string()),
-  /** Filas del resultado (valores serializables a JSON). */
+  /** Filas del resultado (valores serializables a JSON). Vacío cuando no se generó SQL. */
   rows: z.array(z.array(z.unknown())),
-  /** Proveedor LLM que generó el SQL (openai | anthropic | xai | mock). */
+  /** Proveedor LLM que generó el SQL (openai | anthropic | xai | mock), o "system" cuando la respuesta no vino de un LLM. */
   provider: z.string(),
-  /** Modelo LLM usado (e.g. mock-v1, gpt-4o-mini, claude-haiku-4-5). */
+  /** Modelo LLM usado, o un identificador interno (e.g. "intent-classifier", "forecast-run") cuando no hubo LLM. */
   model: z.string(),
+  /** ADITIVO (LOTE B3) · clasificación de la pregunta. Ausente en respuestas de versiones previas. */
+  kind: chatQueryKindSchema.optional(),
+  /** ADITIVO (LOTE B3) · solo presente en respuestas `kind: 'future'` con datos disponibles. */
+  forecast: chatForecastMetaSchema.optional(),
 });
 export type ChatQueryResponse = z.infer<typeof chatQueryResponseSchema>;
 

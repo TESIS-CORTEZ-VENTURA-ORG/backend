@@ -10,6 +10,9 @@
  *  4. RLS vector    — a generic SELECT on sales_history under tenant A
  *                     returns ONLY tenant A rows; tenant B rows (qty=999)
  *                     are invisible.
+ *  5. LOTE B3       — preguntas sobre el futuro (con/sin corrida completada,
+ *                     dentro/fuera de horizonte), rechazo fuera de dominio
+ *                     SIN ejecutar SQL, y clarificación de preguntas ambiguas.
  *
  * CoreAiChatClient is replaced by a controllable stub via NestJS DI override
  * so no real core-ai process is required. The SQL validator, Prisma runInTenant,
@@ -26,6 +29,7 @@ import type { App } from 'supertest/types';
 import { z } from 'zod';
 import { AppModule } from '../src/app.module';
 import { CoreAiChatClient } from '../src/chat/core-ai-chat.client';
+import { addDays, dayOfWeek, todayLima } from '../src/chat/lima-date.util';
 import { apiResponseSchema, authTokensSchema } from '../src/shared';
 
 // --------------------------------------------------------------------------
@@ -37,7 +41,7 @@ if (!adminUrl) throw new Error('DATABASE_URL_ADMIN not set (see .env)');
 
 const TRUNCATE = `
   TRUNCATE TABLE
-    "sales_history","order_items","orders","menu_items","recipes",
+    "forecast_runs","sales_history","order_items","orders","menu_items","recipes",
     "menu_categories","ingredients","audit_logs","refresh_tokens","users","tenants"
   CASCADE
 `;
@@ -84,6 +88,25 @@ const chatResponseSchema = apiResponseSchema(
     rows: z.array(z.array(z.unknown())),
     provider: z.string(),
     model: z.string(),
+    // LOTE B3 · aditivos, ausentes en respuestas previas a este cambio.
+    kind: z
+      .enum(['historical', 'future', 'out_of_domain', 'ambiguous'])
+      .optional(),
+    forecast: z
+      .object({
+        runId: z.string().uuid(),
+        range: z.object({
+          from: z.string(),
+          to: z.string(),
+          label: z.string(),
+        }),
+        totalYhat: z.number(),
+        totalLo: z.number(),
+        totalHi: z.number(),
+        points: z.array(z.unknown()),
+        drivers: z.array(z.unknown()),
+      })
+      .optional(),
   }),
 );
 
@@ -366,6 +389,12 @@ describe('Chat IA — E09 (e2e)', () => {
   async function queryWithSql(
     sql: string,
     token: string,
+    // LOTE B3: `question` now has to survive `classifyIntent` and land on
+    // 'historical' for these tests to still reach `nl2sql` at all — the
+    // generic literal `'test'` has no domain keyword and would be classified
+    // `out_of_domain` (correctly) before ever calling the mock. Any caller
+    // that wants to exercise a NON-historical branch passes its own question.
+    question = 'consulta de prueba sobre ventas',
   ): Promise<request.Response> {
     // Override the provider at the module level for this one call.
     // Since we can't re-compile the app per-test, we reach into the running
@@ -385,7 +414,7 @@ describe('Chat IA — E09 (e2e)', () => {
     const res = await request(app.getHttpServer())
       .post('/api/chat/query')
       .set(bearer(token))
-      .send({ question: 'test' });
+      .send({ question });
 
     // Restore original after call
     mockClient.nl2sql = original;
@@ -591,6 +620,275 @@ describe('Chat IA — E09 (e2e)', () => {
 
       expect(names).toEqual(['Conchas de abanico', 'Pulpo']);
       expect(names).not.toContain('Cebolla roja');
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // 7. LOTE B3 — preguntas sobre el futuro + rechazo elegante fuera de dominio
+  //
+  // La clasificación (`classifyIntent`) corre ANTES de decidir si se llama a
+  // core-ai. `future` responde desde la última `ForecastRun` completada (sin
+  // SQL); `out_of_domain`/`ambiguous` nunca llegan al validador ni a la DB.
+  // Estos escenarios usan un tenant/usuarios propios para no interferir con
+  // el resto de la suite (RLS ya está probado arriba).
+  // --------------------------------------------------------------------------
+
+  describe('LOTE B3 — futuro / fuera de dominio / ambiguo', () => {
+    let futureOwnerToken = '';
+    let futureStaffToken = '';
+    let noForecastOwnerToken = '';
+
+    // Fechas del rango "este fin de semana" resueltas con el MISMO algoritmo
+    // que `intent-classifier.util.ts` (próximo sábado/domingo, Lima).
+    const today = todayLima();
+    const dow = dayOfWeek(today);
+    const saturday = addDays(today, (6 - dow + 7) % 7);
+    const sunday = addDays(saturday, 1);
+    const tomorrow = addDays(today, 1);
+
+    beforeAll(async () => {
+      const hash4 = await hash(password, 4);
+
+      // --- Tenant con una corrida completada (para las respuestas "future" con datos) ---
+      const tenantFuture = await admin.tenant.create({
+        data: { name: 'Motif Futuro' },
+      });
+      await admin.user.createMany({
+        data: [
+          {
+            tenantId: tenantFuture.id,
+            email: 'owner@future.pe',
+            name: 'Owner',
+            passwordHash: hash4,
+            roles: ['owner'],
+          },
+          {
+            tenantId: tenantFuture.id,
+            email: 'staff@future.pe',
+            name: 'Staff',
+            passwordHash: hash4,
+            roles: ['staff'],
+          },
+        ],
+      });
+      await admin.forecastRun.create({
+        data: {
+          tenantId: tenantFuture.id,
+          scope: 'total',
+          horizon: 14,
+          engine: 'auto',
+          status: 'completed',
+          model: 'AutoETS',
+          baseline: 'SeasonalNaive',
+          points: [
+            { target_date: tomorrow, yhat: 50, yhat_lo: 40, yhat_hi: 60 },
+            { target_date: saturday, yhat: 120, yhat_lo: 100, yhat_hi: 140 },
+            { target_date: sunday, yhat: 110, yhat_lo: 90, yhat_hi: 130 },
+          ],
+          drivers: [
+            {
+              date: sunday,
+              kind: 'payday',
+              label: 'Quincena del 15',
+              impact_pct: 12.5,
+            },
+          ],
+          contextStatus: 'calendar_only',
+          completedAt: new Date(),
+        },
+      });
+
+      // --- Tenant SIN ninguna corrida (para needsForecast) ---
+      const tenantNoForecast = await admin.tenant.create({
+        data: { name: 'Motif Sin Pronostico' },
+      });
+      await admin.user.create({
+        data: {
+          tenantId: tenantNoForecast.id,
+          email: 'owner@nopronostico.pe',
+          name: 'Owner',
+          passwordHash: hash4,
+          roles: ['owner'],
+        },
+      });
+
+      futureOwnerToken = await login(app, 'owner@future.pe', password);
+      futureStaffToken = await login(app, 'staff@future.pe', password);
+      noForecastOwnerToken = await login(
+        app,
+        'owner@nopronostico.pe',
+        password,
+      );
+    });
+
+    describe('future — con corrida completada', () => {
+      it('"este fin de semana" devuelve la proyección real (sáb-dom) + drivers, sin SQL', async () => {
+        const res = await request(app.getHttpServer())
+          .post('/api/chat/query')
+          .set(bearer(futureOwnerToken))
+          .send({ question: '¿cuánto voy a vender este fin de semana?' })
+          .expect(200);
+
+        const body = chatResponseSchema.parse(res.body);
+        expect(body.data.kind).toBe('future');
+        expect(body.data.sql).toBe('');
+        expect(body.data.columns).toEqual([]);
+        expect(body.data.rows).toEqual([]);
+        // 120 + 110 = 230 (solo sáb+dom, "mañana" queda fuera del rango pedido).
+        expect(body.data.answer).toContain('230.00');
+        expect(body.data.answer).toContain('Quincena del 15');
+        expect(body.data.answer.toLowerCase()).toContain('proyección');
+        expect(body.data.forecast).toBeDefined();
+        expect(body.data.forecast?.totalYhat).toBe(230);
+        expect(body.data.forecast?.points).toHaveLength(2);
+        expect(body.data.forecast?.drivers).toHaveLength(1);
+      });
+
+      it('"mañana" devuelve solo el punto de mañana (50, sin driver)', async () => {
+        const res = await request(app.getHttpServer())
+          .post('/api/chat/query')
+          .set(bearer(futureOwnerToken))
+          .send({ question: '¿cuánto voy a vender mañana?' })
+          .expect(200);
+
+        const body = chatResponseSchema.parse(res.body);
+        expect(body.data.kind).toBe('future');
+        expect(body.data.forecast?.totalYhat).toBe(50);
+        expect(body.data.forecast?.points).toHaveLength(1);
+        expect(body.data.forecast?.drivers).toHaveLength(0);
+      });
+
+      it('staff → 403 en una pregunta futura (mismo gate read Report que el resto del chat)', async () => {
+        await request(app.getHttpServer())
+          .post('/api/chat/query')
+          .set(bearer(futureStaffToken))
+          .send({ question: '¿cuánto voy a vender este fin de semana?' })
+          .expect(403);
+      });
+
+      it('rango fuera del horizonte de la corrida (el próximo mes) → explica y NO dispara una corrida', async () => {
+        const res = await request(app.getHttpServer())
+          .post('/api/chat/query')
+          .set(bearer(futureOwnerToken))
+          .send({ question: '¿cuánto voy a vender el próximo mes?' })
+          .expect(200);
+
+        const body = chatResponseSchema.parse(res.body);
+        expect(body.data.kind).toBe('future');
+        expect(body.data.forecast).toBeUndefined();
+        expect(body.data.sql).toBe('');
+        expect(body.data.answer.toLowerCase()).toContain('fuera del rango');
+
+        // No debe haber creado una corrida nueva (needsForecast/outOfHorizon
+        // nunca disparan `enqueueForecast`) — sigue habiendo exactamente 1.
+        const runs = await admin.forecastRun.count({
+          where: {
+            tenantId: (
+              await admin.tenant.findFirstOrThrow({
+                where: { name: 'Motif Futuro' },
+              })
+            ).id,
+          },
+        });
+        expect(runs).toBe(1);
+      });
+    });
+
+    describe('future — sin ninguna corrida completada', () => {
+      it('explica que hace falta generar un pronóstico primero, sin SQL ni auto-disparo', async () => {
+        const res = await request(app.getHttpServer())
+          .post('/api/chat/query')
+          .set(bearer(noForecastOwnerToken))
+          .send({ question: '¿cuánto voy a vender este fin de semana?' })
+          .expect(200);
+
+        const body = chatResponseSchema.parse(res.body);
+        expect(body.data.kind).toBe('future');
+        expect(body.data.forecast).toBeUndefined();
+        expect(body.data.sql).toBe('');
+        expect(body.data.answer).toContain(
+          'Todavía no generé ningún pronóstico',
+        );
+
+        const runs = await admin.forecastRun.count({
+          where: {
+            tenantId: (
+              await admin.tenant.findFirstOrThrow({
+                where: { name: 'Motif Sin Pronostico' },
+              })
+            ).id,
+          },
+        });
+        expect(runs).toBe(0);
+      });
+    });
+
+    describe('out_of_domain — QA-08', () => {
+      it('"¿quién ganó el mundial?" → rechazo elegante, SIN tabla de resultados ni SQL ejecutado', async () => {
+        const mockClient = app.get<CoreAiChatClient>(CoreAiChatClient);
+        const nl2sqlSpy = vi.spyOn(mockClient, 'nl2sql');
+
+        const res = await request(app.getHttpServer())
+          .post('/api/chat/query')
+          .set(bearer(ownerToken))
+          .send({ question: '¿quién ganó el mundial?' })
+          .expect(200);
+
+        const body = chatResponseSchema.parse(res.body);
+        expect(body.data.kind).toBe('out_of_domain');
+        expect(body.data.sql).toBe('');
+        expect(body.data.columns).toEqual([]);
+        expect(body.data.rows).toEqual([]);
+        expect(body.data.answer).toContain('Solo puedo responder');
+        // La clasificación NUNCA llega al executor (core-ai ni siquiera se llama).
+        expect(nl2sqlSpy).not.toHaveBeenCalled();
+
+        nl2sqlSpy.mockRestore();
+      });
+    });
+
+    describe('ambiguous — QA-08', () => {
+      it('"¿cómo va todo?" → pide precisión con ejemplos concretos, sin dump de filas', async () => {
+        const mockClient = app.get<CoreAiChatClient>(CoreAiChatClient);
+        const nl2sqlSpy = vi.spyOn(mockClient, 'nl2sql');
+
+        const res = await request(app.getHttpServer())
+          .post('/api/chat/query')
+          .set(bearer(ownerToken))
+          .send({ question: '¿cómo va todo?' })
+          .expect(200);
+
+        const body = chatResponseSchema.parse(res.body);
+        expect(body.data.kind).toBe('ambiguous');
+        expect(body.data.sql).toBe('');
+        expect(body.data.rows).toEqual([]);
+        expect(nl2sqlSpy).not.toHaveBeenCalled();
+
+        nl2sqlSpy.mockRestore();
+      });
+    });
+
+    describe('regresión — preguntas históricas siguen igual', () => {
+      it('"¿qué insumos están por agotarse?" sigue clasificando historical y llega al SQL flow', async () => {
+        const res = await queryWithSql(
+          'SELECT name, stock, min_stock FROM ingredients ' +
+            'WHERE stock <= min_stock ORDER BY name LIMIT 200',
+          ownerToken,
+        );
+        expect(res.status).toBe(200);
+
+        const body = chatResponseSchema.parse(res.body);
+        expect(body.data.kind).toBe('historical');
+        expect(body.data.sql).toContain('SELECT');
+      });
+
+      it('guardrail intacto: "¿cuánto le pago a cada empleado?" sigue rechazando la columna salary', async () => {
+        const res = await queryWithSql(
+          'SELECT name, salary FROM employees LIMIT 10',
+          ownerToken,
+        );
+        expect(res.status).toBe(400);
+      });
     });
   });
 });
