@@ -2,6 +2,11 @@
  * E2e spec — HU-05-11: Cobertura de días de stock por consumo real.
  * Cubre: cobertura finita, cobertura indefinida (sin ventas), 404 para insumo
  * inexistente, CASL 403 para staff.
+ *
+ * Lote B4 (vida útil de insumos, MVP sin lotes): cobertura EFECTIVA =
+ * min(consumo, vida útil restante), atRisk con el escenario del ticket
+ * (8kg, 0.8kg/día, 3 días → 5.6kg en riesgo), y el caso sin compras
+ * registradas (campos de frescura en null, sin inventar una estimación).
  */
 import { Test } from '@nestjs/testing';
 import {
@@ -12,9 +17,12 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { hash } from 'bcryptjs';
-import { z } from 'zod';
 import { AppModule } from './../src/app.module';
-import { apiResponseSchema, authTokensSchema } from './../src/shared';
+import {
+  apiResponseSchema,
+  authTokensSchema,
+  ingredientCoverageResponseSchema,
+} from './../src/shared';
 
 const adminUrl = process.env.DATABASE_URL_ADMIN;
 if (!adminUrl) {
@@ -30,20 +38,16 @@ describe('Ingredient Coverage — HU-05-11 (e2e)', () => {
   const password = 'Secret12345';
   const tokensSchema = apiResponseSchema(authTokensSchema);
 
-  const coverageSchema = apiResponseSchema(
-    z.object({
-      ingredientId: z.uuid(),
-      currentStock: z.string(),
-      avgDailyConsumption: z.string(),
-      basedOnDays: z.literal(30),
-      daysLeft: z.string().nullable(),
-    }),
-  );
+  // Reusa el contrato REAL de `packages/shared` (única fuente de verdad) en
+  // vez de un shape a mano — evita que el test quede desalineado del schema.
+  const coverageSchema = apiResponseSchema(ingredientCoverageResponseSchema);
 
   let ownerToken = '';
   let staffToken = '';
   let ingWithConsumptionId = '';
   let ingNoConsumptionId = '';
+  let ingPerishableWithPurchaseId = '';
+  let ingPerishableNoPurchaseId = '';
 
   const login = async (email: string): Promise<string> => {
     const res = await request(app.getHttpServer())
@@ -124,6 +128,63 @@ describe('Ingredient Coverage — HU-05-11 (e2e)', () => {
     });
     ingNoConsumptionId = ingB.id;
 
+    // Lote B4 · Insumo C: perecible CON compra reciente — escenario exacto del
+    // ticket: stock=8kg, consumo=0.8kg/día (24kg en 30 días), shelfLifeDays=3.
+    // → daysLeft=10, effectiveCoverageDays=min(10,3)=3, atRiskQty=8-0.8×3=5.6kg.
+    const ingC = await admin.ingredient.create({
+      data: {
+        tenantId,
+        sku: 'COV-003',
+        name: 'Pulpo perecible',
+        type: 'raw',
+        unit: 'kg',
+        unitCost: 30,
+        stock: new Prisma.Decimal('8'),
+        shelfLifeDays: 3,
+      },
+    });
+    ingPerishableWithPurchaseId = ingC.id;
+
+    for (let i = 0; i < 30; i++) {
+      const createdAt = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
+      await admin.inventoryMovement.create({
+        data: {
+          tenantId,
+          ingredientId: ingC.id,
+          type: 'sale',
+          qty: new Prisma.Decimal('-0.8'), // -0.8 kg/día (salida)
+          createdAt,
+        },
+      });
+    }
+    // Compra recién recibida "ahora" → vida útil restante ≈ shelfLifeDays (3d).
+    await admin.inventoryMovement.create({
+      data: {
+        tenantId,
+        ingredientId: ingC.id,
+        type: 'purchase',
+        qty: new Prisma.Decimal('8'),
+        createdAt: now,
+      },
+    });
+
+    // Lote B4 · Insumo D: shelfLifeDays configurado pero SIN NINGUNA compra
+    // registrada → no se puede estimar frescura (no se inventa un valor):
+    // lastPurchaseAt/estimatedExpiryAt/freshnessStatus/atRisk* deben ser null.
+    const ingD = await admin.ingredient.create({
+      data: {
+        tenantId,
+        sku: 'COV-004',
+        name: 'Camarones sin compras',
+        type: 'raw',
+        unit: 'kg',
+        unitCost: 33,
+        stock: new Prisma.Decimal('5'),
+        shelfLifeDays: 3,
+      },
+    });
+    ingPerishableNoPurchaseId = ingD.id;
+
     const module = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();
@@ -166,6 +227,9 @@ describe('Ingredient Coverage — HU-05-11 (e2e)', () => {
     const body = coverageSchema.parse(res.body);
     expect(body.data.avgDailyConsumption).toBe('0.000');
     expect(body.data.daysLeft).toBeNull();
+    // Sin shelfLifeDays configurado (no perecible) → todo lo de frescura null.
+    expect(body.data.shelfLifeDays).toBeNull();
+    expect(body.data.freshnessStatus).toBeNull();
   });
 
   it('404 cuando el insumo no existe', async () => {
@@ -189,5 +253,45 @@ describe('Ingredient Coverage — HU-05-11 (e2e)', () => {
     await request(app.getHttpServer())
       .get(`/api/inventory/ingredients/${ingWithConsumptionId}/coverage`)
       .expect(401);
+  });
+
+  // Lote B4 — Vida útil de insumos (MVP sin lotes).
+  it('vida útil: cobertura efectiva = min(consumo, vida restante); atRisk = 8kg−0.8kg/d×3d = 5.6kg', async () => {
+    const res = await request(app.getHttpServer())
+      .get(`/api/inventory/ingredients/${ingPerishableWithPurchaseId}/coverage`)
+      .set(bearer(ownerToken))
+      .expect(200);
+
+    const body = coverageSchema.parse(res.body);
+    expect(body.data.shelfLifeDays).toBe(3);
+    expect(body.data.lastPurchaseAt).not.toBeNull();
+    expect(body.data.estimatedExpiryAt).not.toBeNull();
+    // Cobertura por consumo: 8kg / 0.8kg/día = 10 días.
+    expect(Number(body.data.daysLeft)).toBeCloseTo(10, 0);
+    // Cuello de botella: min(10, ~3) = 3 — NUNCA un promedio de ambos.
+    expect(Number(body.data.effectiveCoverageDays)).toBeCloseTo(3, 0);
+    expect(['fresh', 'expiring_soon']).toContain(body.data.freshnessStatus);
+    // Escenario exacto del ticket: 5.6 kg no se alcanzan a consumir → riesgo.
+    expect(Number(body.data.atRiskQty)).toBeCloseTo(5.6, 1);
+    expect(Number(body.data.atRiskCost)).toBeCloseTo(5.6 * 30, 0);
+  });
+
+  it('vida útil sin compras registradas: no se inventa una estimación (todo null)', async () => {
+    const res = await request(app.getHttpServer())
+      .get(`/api/inventory/ingredients/${ingPerishableNoPurchaseId}/coverage`)
+      .set(bearer(ownerToken))
+      .expect(200);
+
+    const body = coverageSchema.parse(res.body);
+    expect(body.data.shelfLifeDays).toBe(3);
+    expect(body.data.lastPurchaseAt).toBeNull();
+    expect(body.data.estimatedExpiryAt).toBeNull();
+    expect(body.data.freshnessStatus).toBeNull();
+    expect(body.data.atRiskQty).toBeNull();
+    expect(body.data.atRiskCost).toBeNull();
+    // Sin vida útil estimable, effectiveCoverageDays degrada al daysLeft de
+    // siempre (comportamiento HU-05-11 intacto): stock=5kg, sin consumo → null.
+    expect(body.data.daysLeft).toBeNull();
+    expect(body.data.effectiveCoverageDays).toBeNull();
   });
 });

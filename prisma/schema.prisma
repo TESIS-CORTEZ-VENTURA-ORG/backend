@@ -527,6 +527,12 @@ model Ingredient {
   // minStock = umbral de reorden (alertas de stock bajo, HU-05-10).
   stock     Decimal   @default(0) @db.Decimal(12, 3)
   minStock  Decimal   @default(0) @map("min_stock") @db.Decimal(12, 3)
+  // Lote B4 (vida útil de insumos, MVP SIN lotes) — días que dura el insumo
+  // desde su última compra (kardex `type='purchase'`). `null` = no perecible o
+  // aún no configurado → nunca se estima frescura para ese insumo (ver
+  // `ingredient-freshness.util.ts`). SIN default en DB a propósito: no se
+  // inventa un valor para insumos existentes, se llena explícitamente (seed).
+  shelfLifeDays Int?   @map("shelf_life_days")
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")

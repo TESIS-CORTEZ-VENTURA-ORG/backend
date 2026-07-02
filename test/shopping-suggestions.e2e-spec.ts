@@ -2,6 +2,11 @@
  * E2e spec — HU-08-06: Sugerencias de compra basadas en pronóstico.
  * Cubre: happy path (shortfalls reales), needsForecast sin corrida completada,
  * CASL 403 para staff.
+ *
+ * Lote B4 (E08×E05, tope de vida útil): un insumo perecible (`shelfLifeDays`)
+ * con shortfall en TODO el horizonte debe toparse a lo consumible antes de
+ * vencer (`cappedByShelfLife`+`uncappedSuggestedQty`); un insumo sin
+ * `shelfLifeDays` configurado mantiene el comportamiento previo intacto.
  */
 import { Test } from '@nestjs/testing';
 import {
@@ -12,9 +17,12 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { hash } from 'bcryptjs';
-import { z } from 'zod';
 import { AppModule } from './../src/app.module';
-import { apiResponseSchema, authTokensSchema } from './../src/shared';
+import {
+  apiResponseSchema,
+  authTokensSchema,
+  shoppingSuggestionsResponseSchema,
+} from './../src/shared';
 
 const adminUrl = process.env.DATABASE_URL_ADMIN;
 if (!adminUrl) {
@@ -30,24 +38,9 @@ describe('Shopping Suggestions — HU-08-06 (e2e)', () => {
   const password = 'Secret12345';
   const tokensSchema = apiResponseSchema(authTokensSchema);
 
+  // Reusa el contrato REAL de `packages/shared` (única fuente de verdad).
   const suggestionsSchema = apiResponseSchema(
-    z.object({
-      horizon: z.number(),
-      source: z.literal('forecast'),
-      runId: z.string().uuid().nullable(),
-      needsForecast: z.boolean(),
-      suggestions: z.array(
-        z.object({
-          ingredientId: z.uuid(),
-          name: z.string(),
-          unit: z.string(),
-          currentStock: z.string(),
-          forecastConsumption: z.string(),
-          shortfall: z.string(),
-          suggestedQty: z.string(),
-        }),
-      ),
-    }),
+    shoppingSuggestionsResponseSchema,
   );
 
   let ownerToken = '';
@@ -116,7 +109,24 @@ describe('Shopping Suggestions — HU-08-06 (e2e)', () => {
       },
     });
 
-    // Receta con BOM: ingA (0.2 kg x waste 0.1) + ingB (0.15 kg sin waste).
+    // Lote B4 · Insumo E: perecible (shelfLifeDays=2) con shortfall grande en
+    // TODO el horizonte (14d) pero vida útil corta → `suggestedQty` debe
+    // toparse a lo consumible en 2 días, no a los 14 días completos.
+    const ingE = await admin.ingredient.create({
+      data: {
+        tenantId,
+        sku: 'E-001',
+        name: 'Cilantro perecible',
+        type: 'raw',
+        unit: 'kg',
+        unitCost: 12,
+        stock: 0.5,
+        shelfLifeDays: 2,
+      },
+    });
+
+    // Receta con BOM: ingA (0.2kg×waste0.1) + ingB (0.15kg sin waste) +
+    // ingE (0.05kg sin waste, Lote B4).
     const recipe = await admin.recipe.create({
       data: { tenantId, name: 'Ceviche', kind: 'dish' },
     });
@@ -135,6 +145,15 @@ describe('Shopping Suggestions — HU-08-06 (e2e)', () => {
         recipeId: recipe.id,
         ingredientId: ingB.id,
         qty: new Prisma.Decimal('0.15'),
+        wasteFactor: new Prisma.Decimal('0'),
+      },
+    });
+    await admin.recipeItem.create({
+      data: {
+        tenantId,
+        recipeId: recipe.id,
+        ingredientId: ingE.id,
+        qty: new Prisma.Decimal('0.05'),
         wasteFactor: new Prisma.Decimal('0'),
       },
     });
@@ -217,9 +236,27 @@ describe('Shopping Suggestions — HU-08-06 (e2e)', () => {
     const pescado = body.data.suggestions.find((s) => s.name === 'Pescado');
     expect(pescado).toBeDefined();
     expect(Number(pescado!.shortfall)).toBeGreaterThan(0);
+    // Lote B4 · Pescado NO tiene shelfLifeDays configurado → comportamiento
+    // previo intacto: suggestedQty === shortfall, sin topar.
+    expect(pescado!.cappedByShelfLife).toBe(false);
+    expect(pescado!.suggestedQty).toBe(pescado!.shortfall);
+    expect(pescado!.uncappedSuggestedQty).toBeNull();
     // Arroz: stock=1000 → no hay shortfall → NO debe aparecer.
     const arroz = body.data.suggestions.find((s) => s.name === 'Arroz');
     expect(arroz).toBeUndefined();
+
+    // Lote B4 · Cilantro perecible (shelfLifeDays=2, horizon=14): consumo TOTAL
+    // en 14d = 14kg, shortfall sin topar = 14 − 0.5 = 13.5kg. Pero solo se
+    // alcanza a consumir lo de los primeros 2 días (2kg) antes de vencer →
+    // suggestedQty topada = 2 − 0.5 = 1.5kg.
+    const cilantro = body.data.suggestions.find(
+      (s) => s.name === 'Cilantro perecible',
+    );
+    expect(cilantro).toBeDefined();
+    expect(Number(cilantro!.shortfall)).toBeCloseTo(13.5, 1);
+    expect(cilantro!.cappedByShelfLife).toBe(true);
+    expect(Number(cilantro!.suggestedQty)).toBeCloseTo(1.5, 1);
+    expect(Number(cilantro!.uncappedSuggestedQty)).toBeCloseTo(13.5, 1);
   });
 
   it('owner: devuelve needsForecast cuando no hay corrida completada', async () => {

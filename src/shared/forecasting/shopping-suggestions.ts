@@ -19,6 +19,12 @@ import { forecastContextStatusSchema, forecastDriverSchema } from './forecast';
  *    usada, para que el frontend narre el porqué de un shortfall (p. ej.
  *    "Fiestas Patrias en 12 días: +35% demanda proyectada" junto al insumo
  *    que va a faltar). `drivers` ya viene acotado al horizonte por core-ai.
+ *  - Lote B4 (E08×E05): `suggestedQty` de un insumo perecible (`shelfLifeDays`
+ *    configurado) se topa por lo que realmente se alcanza a consumir antes de
+ *    que venza — no tiene sentido sugerir comprar más de lo que se va a poder
+ *    usar. `cappedByShelfLife`/`uncappedSuggestedQty` son ADITIVOS (no rompen
+ *    consumidores existentes) y solo se activan para insumos con
+ *    `shelfLifeDays` configurado (ver `shelf-life-cap.util.ts`).
  */
 
 /** Query params de `GET /forecasting/shopping-suggestions`. */
@@ -40,8 +46,17 @@ export const shoppingSuggestionItemSchema = z.object({
   forecastConsumption: z.string(),
   /** forecastConsumption − currentStock, siempre > 0 (Decimal serializado). */
   shortfall: z.string(),
-  /** Cantidad sugerida a comprar (= shortfall en esta versión). */
+  /** Cantidad sugerida a comprar (= shortfall, salvo que `cappedByShelfLife`). */
   suggestedQty: z.string(),
+  /** Lote B4 · `true` cuando `suggestedQty` se redujo porque el insumo no
+   *  alcanza a consumirse antes de su vencimiento estimado (vida útil, MVP
+   *  sin lotes). `false` sin `shelfLifeDays` configurado o cuando el tope no
+   *  llegó a activarse (p. ej. `shelfLifeDays` ≥ horizonte solicitado). */
+  cappedByShelfLife: z.boolean(),
+  /** Lote B4 · `shortfall` SIN topar, solo cuando `cappedByShelfLife=true`
+   *  (para que la UI explique "se sugieren X, aunque el déficit real es Y");
+   *  `null` en cualquier otro caso. */
+  uncappedSuggestedQty: z.string().nullable(),
 });
 export type ShoppingSuggestionItem = z.infer<
   typeof shoppingSuggestionItemSchema

@@ -83,7 +83,7 @@ let nextResponse: () => any = () => ({
 const coreAiStub: Pick<CoreAiClient, 'runForecast'> = {
   runForecast: (req: CoreAiForecastRequest) => {
     capturedRequests.push(req);
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+
     return Promise.resolve(nextResponse());
   },
 };
@@ -367,7 +367,7 @@ describe('Forecast contextual — HU-08-07 fase 2 (e2e)', () => {
     expect(run.status).toBe('completed');
 
     expect(capturedRequests).toHaveLength(1);
-    const sent = capturedRequests[0]!;
+    const sent = capturedRequests[0];
     expect(sent.use_context).toBe(true);
     expect(sent.engine).toBe('auto');
     expect(sent.location).toBeUndefined();
@@ -391,7 +391,7 @@ describe('Forecast contextual — HU-08-07 fase 2 (e2e)', () => {
     await waitForRun(id, ownerLocToken);
 
     expect(capturedRequests).toHaveLength(1);
-    expect(capturedRequests[0]!.location).toEqual({
+    expect(capturedRequests[0].location).toEqual({
       latitude: -8.1116,
       longitude: -79.0287,
     });
@@ -516,7 +516,7 @@ describe('Forecast contextual — HU-08-07 fase 2 (e2e)', () => {
     expect(body.runId).toBe(id);
     expect(body.contextStatus).toBe('full');
     expect(body.drivers).toHaveLength(1);
-    expect(body.drivers[0]!.date).toBe(driverDate);
+    expect(body.drivers[0].date).toBe(driverDate);
     // El insumo Pulpo (stock=1) debe seguir apareciendo con déficit.
     expect(body.suggestions.length).toBeGreaterThan(0);
   }, 15_000);

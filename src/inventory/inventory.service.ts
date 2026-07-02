@@ -12,6 +12,7 @@ import {
   type PriceTrendResponse,
   type UpdateInventoryLevelInput,
 } from '../shared';
+import { computeFreshness } from './ingredient-freshness.util';
 
 type MovementRow = Prisma.InventoryMovementGetPayload<{
   include: { ingredient: true };
@@ -280,6 +281,13 @@ export class InventoryService {
    * el consumo promedio diario de los últimos 30 días (movimientos type='sale').
    * `daysLeft` es null cuando avgDailyConsumption = 0 (cobertura indefinida).
    * Usa `$queryRaw` para el `SUM(ABS(qty))` en la ventana fija (RLS FORCE activo).
+   *
+   * Lote B4 · Además combina la vida útil del insumo (`shelfLifeDays`) con la
+   * fecha de su último movimiento `purchase` (MVP sin lotes: única referencia
+   * de frescura posible) vía `computeFreshness` (lógica pura, unit-testeada
+   * en `ingredient-freshness.util.spec.ts`) — devuelve la cobertura EFECTIVA
+   * (min entre consumo y vida útil) y el stock en riesgo de vencer sin
+   * consumirse (`atRiskQty`/`atRiskCost`).
    */
   async ingredientCoverage(
     tenantId: string,
@@ -288,7 +296,7 @@ export class InventoryService {
     return this.prisma.runInTenant(tenantId, async (tx) => {
       const ingredient = await tx.ingredient.findFirst({
         where: { id: ingredientId, deletedAt: null },
-        select: { id: true, stock: true },
+        select: { id: true, stock: true, unitCost: true, shelfLifeDays: true },
       });
       if (!ingredient) {
         throw new NotFoundException('Insumo no encontrado');
@@ -308,16 +316,34 @@ export class InventoryService {
       const BASE_DAYS = new Prisma.Decimal(30);
       const avgDaily = totalConsumed.div(BASE_DAYS);
 
-      const daysLeft = avgDaily.gt(0)
-        ? ingredient.stock.div(avgDaily).toFixed(1)
-        : null;
+      const daysLeft = avgDaily.gt(0) ? ingredient.stock.div(avgDaily) : null;
+
+      // Lote B4 · Fecha de referencia de frescura: el ÚLTIMO movimiento
+      // `purchase` del insumo (MVP sin lotes). Sin compras registradas →
+      // `null` (computeFreshness no inventa una estimación).
+      const lastPurchase = await tx.inventoryMovement.findFirst({
+        where: { ingredientId: ingredient.id, type: 'purchase' },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true },
+      });
+
+      const freshness = computeFreshness({
+        stock: ingredient.stock,
+        avgDailyConsumption: avgDaily,
+        daysLeft,
+        shelfLifeDays: ingredient.shelfLifeDays,
+        lastPurchaseAt: lastPurchase?.createdAt ?? null,
+        unitCost: ingredient.unitCost,
+      });
 
       return {
         ingredientId: ingredient.id,
         currentStock: ingredient.stock.toFixed(3),
         avgDailyConsumption: avgDaily.toFixed(3),
         basedOnDays: 30,
-        daysLeft,
+        daysLeft: daysLeft ? daysLeft.toFixed(1) : null,
+        shelfLifeDays: ingredient.shelfLifeDays,
+        ...freshness,
       };
     });
   }

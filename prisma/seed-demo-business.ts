@@ -119,6 +119,25 @@ const CATEGORIES = [
 //   - Carnes: lomo de res S/32/kg (pulpa limpia distribuidor mayorista), pollo S/17/kg.
 //   - Pisco: S/40/L (botella 750ml ≈ S/30, costo puro de insumo).
 // `low: true` fuerza stock < minStock (alimenta lowStockCount del dashboard).
+//
+// SHELF_LIFE_DAYS_BY_CATEGORY (Lote B4, vida útil de insumos MVP sin lotes) —
+// un valor representativo por categoría (no un CRUD todavía, ver
+// `Ingredient.shelfLifeDays`); rangos de referencia del negocio:
+//   - Pescados y Mariscos: 2-3 días (perecible extremo, cadena de frío corta).
+//   - Carnes: 4-5 días (refrigerado, sin congelar).
+//   - Verduras: 5-7 días (hoja/fruta fresca, vida más larga que el mar).
+//   - Abarrotes/Bebidas: 180+ días (secos/envasados, prácticamente no vencen
+//     en el horizonte operativo del negocio).
+// Categorías fuera de este mapa quedan `shelfLifeDays: null` (no perecible o
+// sin configurar) a propósito — NO se inventa un valor por defecto genérico.
+const SHELF_LIFE_DAYS_BY_CATEGORY: Record<string, number> = {
+  'Pescados y Mariscos': 3,
+  Carnes: 5,
+  Verduras: 6,
+  Abarrotes: 200,
+  Bebidas: 220,
+};
+
 type IngSeed = {
   sku: string;
   name: string;
@@ -937,6 +956,9 @@ async function main(): Promise<void> {
         unitCost: ing.unitCost,
         stock: ing.stock,
         minStock: ing.minStock,
+        // Lote B4 · vida útil por categoría (ver SHELF_LIFE_DAYS_BY_CATEGORY);
+        // `undefined` categoría fuera del mapa → null (no perecible/sin config).
+        shelfLifeDays: SHELF_LIFE_DAYS_BY_CATEGORY[ing.category] ?? null,
       },
     });
     ingBySku.set(ing.sku, created.id);

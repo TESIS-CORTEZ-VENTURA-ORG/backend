@@ -40,6 +40,10 @@ import {
   type AggregatedSeries,
   type DailyTotal,
 } from './sales-aggregation.util';
+import {
+  capSuggestedQtyByShelfLife,
+  sumForecastUnits,
+} from './shelf-life-cap.util';
 
 // core-ai exige al menos 2 puntos para inferir; con menos no hay serie útil.
 const MIN_POINTS_TO_FORECAST = 2;
@@ -456,6 +460,24 @@ export class ForecastingService {
         totalForecast = totalForecast.add(new Prisma.Decimal(p.yhat));
       }
 
+      // Lote B4 · Copia ordenada asc por fecha para poder tomar "los primeros
+      // N días" de forma determinista (no se asume el orden de `run.points`,
+      // ver `getForecastForRange`/`validateLatest` que sí re-ordenan por lo
+      // mismo). Memoiza Σyhat(primerosNDías) por N — varios insumos pueden
+      // compartir el mismo `shelfLifeDays` (p. ej. todo el pescado = 2-3d), no
+      // hace falta re-sumar por insumo.
+      const sortedFuturePoints = [...futurePoints].sort((a, b) =>
+        a.target_date.localeCompare(b.target_date),
+      );
+      const subWindowSumCache = new Map<number, Prisma.Decimal>();
+      const subWindowForecastUnits = (days: number): Prisma.Decimal => {
+        const cached = subWindowSumCache.get(days);
+        if (cached) return cached;
+        const sum = sumForecastUnits(sortedFuturePoints, days);
+        subWindowSumCache.set(days, sum);
+        return sum;
+      };
+
       // Step 3: dish sales shares from the last 30 days in sales_history.
       type DishRow = { menu_item_id: string; qty: string };
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
@@ -559,12 +581,33 @@ export class ForecastingService {
       for (const [ingredientId, { name, unit, qty }] of consumptionMap) {
         const ing = await tx.ingredient.findFirst({
           where: { id: ingredientId, deletedAt: null },
-          select: { stock: true },
+          select: { stock: true, shelfLifeDays: true },
         });
         if (!ing) continue;
 
         const shortfall = qty.sub(ing.stock);
         if (shortfall.gt(0)) {
+          // Lote B4 · Sin `shelfLifeDays` configurado, comportamiento intacto
+          // (suggestedQty = shortfall). Con vida útil configurada, se topa a
+          // lo consumible antes de vencer (`capSuggestedQtyByShelfLife`).
+          let suggestedQty = shortfall;
+          let cappedByShelfLife = false;
+          let uncappedSuggestedQty: Prisma.Decimal | null = null;
+
+          if (ing.shelfLifeDays != null) {
+            const subWindowDays = Math.min(horizon, ing.shelfLifeDays);
+            const cap = capSuggestedQtyByShelfLife({
+              shortfall,
+              forecastConsumption: qty,
+              currentStock: ing.stock,
+              totalForecastUnits: totalForecast,
+              subWindowForecastUnits: subWindowForecastUnits(subWindowDays),
+            });
+            suggestedQty = cap.suggestedQty;
+            cappedByShelfLife = cap.cappedByShelfLife;
+            uncappedSuggestedQty = cap.uncappedSuggestedQty;
+          }
+
           suggestions.push({
             ingredientId,
             name,
@@ -572,7 +615,11 @@ export class ForecastingService {
             currentStock: ing.stock.toFixed(3),
             forecastConsumption: qty.toFixed(3),
             shortfall: shortfall.toFixed(3),
-            suggestedQty: shortfall.toFixed(3),
+            suggestedQty: suggestedQty.toFixed(3),
+            cappedByShelfLife,
+            uncappedSuggestedQty: uncappedSuggestedQty
+              ? uncappedSuggestedQty.toFixed(3)
+              : null,
           });
         }
       }
