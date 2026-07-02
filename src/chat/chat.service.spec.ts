@@ -83,6 +83,7 @@ function buildForecasting(result?: Partial<ForecastRangeAnswer>) {
     totalLo: null,
     totalHi: null,
     drivers: [],
+    avgUnitPrice: null,
   };
   return {
     getForecastForRange: vi
@@ -278,7 +279,7 @@ describe('ChatService — LOTE B3: clasificación de intención', () => {
     expect(result.answer).toContain('2026-07-09');
   });
 
-  it('future WITH points in range: returns the real projection + drivers, no SQL', async () => {
+  it('future WITH points in range: returns the real projection in UNITS (platos), no SQL — QA-23', async () => {
     const forecasting = buildForecasting({
       needsForecast: false,
       outOfHorizon: false,
@@ -299,6 +300,9 @@ describe('ChatService — LOTE B3: clasificación de intención', () => {
           impact_pct: 12,
         },
       ],
+      // No sales in the reference window for this stub tenant — the answer
+      // must degrade to units-only, NEVER fabricate a S/ figure.
+      avgUnitPrice: null,
     });
     const { client, nl2sql } = buildCoreAiChat(
       'SELECT 1 FROM sales_history LIMIT 200',
@@ -317,7 +321,12 @@ describe('ChatService — LOTE B3: clasificación de intención', () => {
     expect(nl2sql).not.toHaveBeenCalled();
     expect(result.kind).toBe('future');
     expect(result.sql).toBe('');
-    expect(result.answer).toContain('190.00');
+    // QA-23 root cause under test: the old code formatted 190 (UNITS, sum of
+    // `qty`) as "S/ 190.00" — a fabricated currency figure ~1% of the real
+    // daily sales. The fix reports the real unit ("platos") and never prints
+    // "S/" unless a derived estimate is actually available.
+    expect(result.answer).toContain('190 platos');
+    expect(result.answer).not.toContain('S/');
     expect(result.answer).toContain('Quincena del 15');
     expect(result.answer).toContain('proyección del modelo');
     expect(result.forecast).toMatchObject({
@@ -325,9 +334,94 @@ describe('ChatService — LOTE B3: clasificación de intención', () => {
       totalYhat: 190,
       totalLo: 150,
       totalHi: 230,
+      unitLabel: 'platos',
+      estimatedRevenue: null,
     });
     expect(result.forecast?.points).toHaveLength(2);
     expect(result.forecast?.drivers).toHaveLength(1);
+  });
+
+  it('future WITH avgUnitPrice available: derives + labels an estimated S/ figure — QA-23', async () => {
+    const forecasting = buildForecasting({
+      needsForecast: false,
+      outOfHorizon: false,
+      runId: '11111111-1111-1111-1111-111111111111',
+      generatedAt: '2026-07-01T12:00:00.000Z',
+      points: [
+        { target_date: '2026-07-04', yhat: 45, yhat_lo: 38, yhat_hi: 54 },
+        { target_date: '2026-07-05', yhat: 46, yhat_lo: 38, yhat_hi: 55 },
+      ],
+      totalYhat: 91,
+      totalLo: 76,
+      totalHi: 109,
+      drivers: [],
+      avgUnitPrice: 46.55,
+    });
+    const service = new ChatService(
+      mockPrisma as never,
+      buildCoreAiChat('SELECT 1 FROM sales_history LIMIT 200').client,
+      forecasting as never,
+    );
+
+    const result = await service.query(
+      'tenant-1',
+      '¿cuánto voy a vender este fin de semana?',
+    );
+
+    expect(result.answer).toContain('91 platos');
+    expect(result.answer).toContain('S/ 4236.05');
+    expect(result.answer).toContain('ticket promedio por plato');
+    expect(result.answer).toContain('S/ 46.55/plato');
+    expect(result.forecast?.estimatedRevenue).toEqual({
+      total: 4236.05,
+      lo: 3537.8,
+      hi: 5073.95,
+      avgUnitPrice: 46.55,
+      basisDays: 30,
+    });
+  });
+
+  it('QA-22: two drivers sharing the same label are narrated ONCE, not duplicated', async () => {
+    const forecasting = buildForecasting({
+      needsForecast: false,
+      outOfHorizon: false,
+      runId: '11111111-1111-1111-1111-111111111111',
+      points: [
+        { target_date: '2026-07-04', yhat: 45, yhat_lo: 38, yhat_hi: 54 },
+        { target_date: '2026-07-05', yhat: 46, yhat_lo: 38, yhat_hi: 55 },
+      ],
+      totalYhat: 91,
+      totalLo: 76,
+      totalHi: 109,
+      drivers: [
+        {
+          date: '2026-07-04',
+          kind: 'weekend',
+          label: 'Fin de semana',
+          impact_pct: 54,
+        },
+        {
+          date: '2026-07-05',
+          kind: 'weekend',
+          label: 'Fin de semana',
+          impact_pct: 54,
+        },
+      ],
+      avgUnitPrice: null,
+    });
+    const service = new ChatService(
+      mockPrisma as never,
+      buildCoreAiChat('SELECT 1 FROM sales_history LIMIT 200').client,
+      forecasting as never,
+    );
+
+    const result = await service.query(
+      'tenant-1',
+      '¿cuánto voy a vender este fin de semana?',
+    );
+
+    expect(result.answer).toContain('Incluye el efecto de Fin de semana.');
+    expect(result.answer).not.toContain('Fin de semana, Fin de semana');
   });
 
   it('historical regression: still calls core-ai nl2sql like before', async () => {

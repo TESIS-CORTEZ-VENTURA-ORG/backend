@@ -103,6 +103,17 @@ const chatResponseSchema = apiResponseSchema(
         totalYhat: z.number(),
         totalLo: z.number(),
         totalHi: z.number(),
+        // QA-23 (LOTE B5) · aditivos — unidades reales + estimación derivada.
+        unitLabel: z.string(),
+        estimatedRevenue: z
+          .object({
+            total: z.number(),
+            lo: z.number(),
+            hi: z.number(),
+            avgUnitPrice: z.number(),
+            basisDays: z.number(),
+          })
+          .nullable(),
         points: z.array(z.unknown()),
         drivers: z.array(z.unknown()),
       })
@@ -698,6 +709,32 @@ describe('Chat IA — E09 (e2e)', () => {
         },
       });
 
+      // QA-23 (LOTE B5) · `sales_history` reciente para "Motif Futuro" — el
+      // ticket promedio por plato real (S/500/20 = S/25.00) que el chat DEBE
+      // usar para derivar `estimatedRevenue`. `soldOn: now()` cae siempre
+      // dentro de la ventana de 30 días (`AVG_UNIT_PRICE_WINDOW_DAYS`),
+      // sin importar cuándo corra la suite.
+      await admin.salesHistory.createMany({
+        data: [
+          {
+            tenantId: tenantFuture.id,
+            soldOn: new Date(),
+            dishName: 'Plato A',
+            qty: 10,
+            unitPrice: 20,
+            total: 200,
+          },
+          {
+            tenantId: tenantFuture.id,
+            soldOn: new Date(),
+            dishName: 'Plato B',
+            qty: 10,
+            unitPrice: 30,
+            total: 300,
+          },
+        ],
+      });
+
       // --- Tenant SIN ninguna corrida (para needsForecast) ---
       const tenantNoForecast = await admin.tenant.create({
         data: { name: 'Motif Sin Pronostico' },
@@ -734,17 +771,33 @@ describe('Chat IA — E09 (e2e)', () => {
         expect(body.data.sql).toBe('');
         expect(body.data.columns).toEqual([]);
         expect(body.data.rows).toEqual([]);
-        // 120 + 110 = 230 (solo sáb+dom, "mañana" queda fuera del rango pedido).
-        expect(body.data.answer).toContain('230.00');
+        // QA-23 · 120 + 110 = 230 UNIDADES (platos, solo sáb+dom — "mañana"
+        // queda fuera del rango pedido), NUNCA "S/ 230.00" (el bug original:
+        // re-etiquetar unidades como dinero — ~1% del valor real observado
+        // en producción). El monto en soles SOLO aparece como estimación
+        // DERIVADA y etiquetada (ticket promedio S/25.00/plato del seed).
+        expect(body.data.answer).toContain('230 platos');
+        expect(body.data.answer).not.toMatch(/^Se proyectan S\//);
+        expect(body.data.answer).toContain('S/ 5750.00');
+        expect(body.data.answer).toContain('ticket promedio por plato');
+        expect(body.data.answer).toContain('S/ 25.00/plato');
         expect(body.data.answer).toContain('Quincena del 15');
         expect(body.data.answer.toLowerCase()).toContain('proyección');
         expect(body.data.forecast).toBeDefined();
         expect(body.data.forecast?.totalYhat).toBe(230);
+        expect(body.data.forecast?.unitLabel).toBe('platos');
+        expect(body.data.forecast?.estimatedRevenue).toEqual({
+          total: 5750,
+          lo: 4750,
+          hi: 6750,
+          avgUnitPrice: 25,
+          basisDays: 30,
+        });
         expect(body.data.forecast?.points).toHaveLength(2);
         expect(body.data.forecast?.drivers).toHaveLength(1);
       });
 
-      it('"mañana" devuelve solo el punto de mañana (50, sin driver)', async () => {
+      it('"mañana" devuelve solo el punto de mañana (50 platos, sin driver) + estimación derivada', async () => {
         const res = await request(app.getHttpServer())
           .post('/api/chat/query')
           .set(bearer(futureOwnerToken))
@@ -753,7 +806,15 @@ describe('Chat IA — E09 (e2e)', () => {
 
         const body = chatResponseSchema.parse(res.body);
         expect(body.data.kind).toBe('future');
+        expect(body.data.answer).toContain('50 platos');
         expect(body.data.forecast?.totalYhat).toBe(50);
+        expect(body.data.forecast?.estimatedRevenue).toEqual({
+          total: 1250,
+          lo: 1000,
+          hi: 1500,
+          avgUnitPrice: 25,
+          basisDays: 30,
+        });
         expect(body.data.forecast?.points).toHaveLength(1);
         expect(body.data.forecast?.drivers).toHaveLength(0);
       });
@@ -791,6 +852,117 @@ describe('Chat IA — E09 (e2e)', () => {
           },
         });
         expect(runs).toBe(1);
+      });
+
+      it('QA-24: "¿Cuánto venderé en diciembre?" clasifica como future (futuro simple) y explica el horizonte — NUNCA cae al SQL histórico', async () => {
+        const mockClient = app.get<CoreAiChatClient>(CoreAiChatClient);
+        const nl2sqlSpy = vi.spyOn(mockClient, 'nl2sql');
+
+        const res = await request(app.getHttpServer())
+          .post('/api/chat/query')
+          .set(bearer(futureOwnerToken))
+          .send({ question: '¿Cuánto venderé en diciembre?' })
+          .expect(200);
+
+        const body = chatResponseSchema.parse(res.body);
+        // Repro exacto QA-24: antes de este fix, "venderé" no disparaba
+        // ningún signal de futuro y la pregunta caía al flujo histórico,
+        // ejecutando SQL con `sold_on >= '2023-12-01'` y respondiendo
+        // "no hay datos disponibles" en vez de explicar el horizonte.
+        expect(body.data.kind).toBe('future');
+        expect(body.data.sql).toBe('');
+        expect(body.data.forecast).toBeUndefined();
+        expect(body.data.answer.toLowerCase()).toContain('fuera del rango');
+        expect(body.data.answer).not.toContain('no hay datos');
+        expect(nl2sqlSpy).not.toHaveBeenCalled();
+
+        nl2sqlSpy.mockRestore();
+
+        // Tampoco dispara una corrida nueva (mismo invariante que "próximo mes").
+        const runs = await admin.forecastRun.count({
+          where: {
+            tenantId: (
+              await admin.tenant.findFirstOrThrow({
+                where: { name: 'Motif Futuro' },
+              })
+            ).id,
+          },
+        });
+        expect(runs).toBe(1);
+      });
+    });
+
+    describe('QA-22 — drivers duplicados en el rango se narran UNA sola vez', () => {
+      let qa22OwnerToken = '';
+
+      beforeAll(async () => {
+        const hash4 = await hash(password, 4);
+        const tenantQa22 = await admin.tenant.create({
+          data: { name: 'Motif QA-22' },
+        });
+        await admin.user.create({
+          data: {
+            tenantId: tenantQa22.id,
+            email: 'owner@qa22.pe',
+            name: 'Owner',
+            passwordHash: hash4,
+            roles: ['owner'],
+          },
+        });
+        // Un fin de semana real trae 2 drivers `weekend` (sáb + dom) con el
+        // MISMO label — la repro exacta de QA-22 ("Incluye el efecto de Fin
+        // de semana, Fin de semana."). Tenant dedicado para no acoplar esta
+        // aserción a la fecha en que corre la suite (evita colisión con el
+        // test de "mañana" de arriba si algún día `tomorrow === saturday`).
+        await admin.forecastRun.create({
+          data: {
+            tenantId: tenantQa22.id,
+            scope: 'total',
+            horizon: 14,
+            engine: 'auto',
+            status: 'completed',
+            model: 'AutoETS',
+            baseline: 'SeasonalNaive',
+            points: [
+              { target_date: saturday, yhat: 60, yhat_lo: 50, yhat_hi: 70 },
+              { target_date: sunday, yhat: 55, yhat_lo: 45, yhat_hi: 65 },
+            ],
+            drivers: [
+              {
+                date: saturday,
+                kind: 'weekend',
+                label: 'Fin de semana',
+                impact_pct: 54,
+              },
+              {
+                date: sunday,
+                kind: 'weekend',
+                label: 'Fin de semana',
+                impact_pct: 54,
+              },
+            ],
+            contextStatus: 'calendar_only',
+            completedAt: new Date(),
+          },
+        });
+        qa22OwnerToken = await login(app, 'owner@qa22.pe', password);
+      });
+
+      it('"este fin de semana" narra "Fin de semana" una sola vez, no duplicado', async () => {
+        const res = await request(app.getHttpServer())
+          .post('/api/chat/query')
+          .set(bearer(qa22OwnerToken))
+          .send({ question: '¿cuánto voy a vender este fin de semana?' })
+          .expect(200);
+
+        const body = chatResponseSchema.parse(res.body);
+        // Los 2 drivers crudos SIGUEN viajando (el frontend los usa para el
+        // chip/gráfico) — la dedupe es SOLO en la frase narrada de `answer`.
+        expect(body.data.forecast?.drivers).toHaveLength(2);
+        expect(body.data.answer).toContain(
+          'Incluye el efecto de Fin de semana.',
+        );
+        expect(body.data.answer).not.toContain('Fin de semana, Fin de semana');
       });
     });
 

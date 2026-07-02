@@ -208,4 +208,97 @@ describe('classifyIntent', () => {
       expect(withAccents).toEqual(withoutAccents);
     });
   });
+
+  describe('QA-24 — simple future tense (no ir-a-infinitive)', () => {
+    it('the exact repro: "¿Cuánto venderé en diciembre?" classifies as future, resolved to next December', () => {
+      // TODAY = 2026-07-02 → December hasn't happened yet this year → 2026-12.
+      expect(classifyIntent('¿Cuánto venderé en diciembre?', TODAY)).toEqual({
+        kind: 'future',
+        range: { from: '2026-12-01', to: '2026-12-31', label: 'diciembre' },
+      });
+    });
+
+    it('"¿cuánto ganaré la próxima semana?" (simple future, no ir-a) resolves the explicit range', () => {
+      expect(
+        classifyIntent('¿cuánto ganaré la próxima semana?', TODAY),
+      ).toEqual({
+        kind: 'future',
+        range: {
+          from: '2026-07-06',
+          to: '2026-07-12',
+          label: 'la próxima semana',
+        },
+      });
+    });
+
+    it('"¿cuánto tendré en caja mañana?" (irregular future stem) classifies as future', () => {
+      expect(classifyIntent('¿cuánto tendré en caja mañana?', TODAY)).toEqual({
+        kind: 'future',
+        range: { from: '2026-07-03', to: '2026-07-03', label: 'mañana' },
+      });
+    });
+
+    it('simple future tense with no explicit range falls back to the 7-day window', () => {
+      expect(classifyIntent('¿cuánto venderé?', TODAY)).toEqual({
+        kind: 'future',
+        range: {
+          from: '2026-07-03',
+          to: '2026-07-09',
+          label: 'los próximos 7 días',
+        },
+      });
+    });
+  });
+
+  describe('QA-24 — month-name range resolution', () => {
+    it('a month already fully in the past this year rolls over to next year', () => {
+      // TODAY = 2026-07-02 → marzo 2026 already happened → marzo 2027.
+      expect(classifyIntent('¿cuánto voy a vender en marzo?', TODAY)).toEqual({
+        kind: 'future',
+        range: { from: '2027-03-01', to: '2027-03-31', label: 'marzo' },
+      });
+    });
+
+    it('the current month resolves within the current year, not next', () => {
+      expect(classifyIntent('¿cuánto voy a vender en julio?', TODAY)).toEqual({
+        kind: 'future',
+        range: { from: '2026-07-01', to: '2026-07-31', label: 'julio' },
+      });
+    });
+
+    it("'setiembre' (Peruvian spelling) resolves the same as 'septiembre'", () => {
+      expect(
+        classifyIntent('¿cuánto voy a vender en setiembre?', TODAY),
+      ).toEqual({
+        kind: 'future',
+        range: { from: '2026-09-01', to: '2026-09-30', label: 'setiembre' },
+      });
+    });
+
+    it('regression: a bare month name WITHOUT any future signal stays historical (does not fall to the December-2023 bug either way)', () => {
+      // "vendí" is past tense — no ir-a, no simple future, no forecast word.
+      // Must NOT be reclassified as future just because "diciembre" appears.
+      expect(classifyIntent('¿cuánto vendí en diciembre?', TODAY)).toEqual({
+        kind: 'historical',
+      });
+    });
+
+    it('regression: a relative future phrase still wins over a stray month mention', () => {
+      // "el próximo mes" is the explicit range; "diciembre" here is noise —
+      // resolveExplicitRange must take priority over resolveMonthRange.
+      expect(
+        classifyIntent(
+          '¿cuánto voy a vender el próximo mes? (no diciembre)',
+          TODAY,
+        ),
+      ).toEqual({
+        kind: 'future',
+        range: {
+          from: '2026-08-01',
+          to: '2026-08-31',
+          label: 'el próximo mes',
+        },
+      });
+    });
+  });
 });

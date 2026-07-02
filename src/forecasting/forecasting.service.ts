@@ -75,6 +75,15 @@ const SHORTFALL_RECIPIENT_ROLES: AppRole[] = ['owner', 'manager'];
 // engañoso). Por debajo, la respuesta sigue siendo 200 con `needsMoreData: true`.
 const MIN_ACCURACY_POINTS = 3;
 
+// QA-23 (LOTE B5) · Ventana usada para derivar el "ticket promedio por plato"
+// (S/) que el chat usa para ESTIMAR ingresos a partir de unidades pronosticadas
+// (ver `getForecastForRange`). 30 días es la MISMA ventana que ya usa
+// `shoppingSuggestions` para repartir el forecast entre platos por su
+// participación histórica — consistencia entre features que ya leen
+// `sales_history` con la misma óptica ("los últimos 30 días son representativos
+// del mix de venta actual"), no una constante nueva inventada para este fix.
+export const AVG_UNIT_PRICE_WINDOW_DAYS = 30;
+
 /** Respuesta del seam de demanda: la serie + metadatos de calidad. Lo que `points`
  *  contiene es exactamente el `history` que consume `core-ai` (`frequency:"D"`). */
 export interface DemandSeriesResponse {
@@ -146,6 +155,17 @@ export interface ForecastRangeAnswer {
   totalHi: number | null;
   /** Drivers de la corrida que caen dentro de `[from,to]`, ordenados por fecha. */
   drivers: ForecastDriver[];
+  /**
+   * QA-23 (LOTE B5) · Ticket promedio por plato (S/) de los últimos
+   * {@link AVG_UNIT_PRICE_WINDOW_DAYS} días de `sales_history`
+   * (`SUM(total)/SUM(qty)`), SOLO calculado cuando hay `points` en rango (el
+   * caller lo usa para DERIVAR una estimación de ingresos a partir de
+   * unidades — nunca para re-etiquetar unidades como dinero, ver
+   * `ChatService.answerFuture`). `null` cuando no hubo ventas en esa ventana
+   * (tenant nuevo/sin histórico reciente) — el caller debe entonces omitir la
+   * estimación derivada, no inventar un precio.
+   */
+  avgUnitPrice: number | null;
 }
 
 /** Vista de una corrida persistida (lo que devuelven run/poll/predictions). */
@@ -661,78 +681,113 @@ export class ForecastingService {
     from: string,
     to: string,
   ): Promise<ForecastRangeAnswer> {
-    const run = await this.prisma.runInTenant(tenantId, (tx) =>
-      tx.forecastRun.findFirst({
+    return this.prisma.runInTenant(tenantId, async (tx) => {
+      const run = await tx.forecastRun.findFirst({
         where: { status: 'completed', scope: 'total' },
         orderBy: { completedAt: 'desc' },
-      }),
-    );
+      });
 
-    if (!run) {
-      return {
-        needsForecast: true,
-        runId: null,
-        outOfHorizon: false,
-        horizonEnd: null,
-        generatedAt: null,
-        points: [],
-        totalYhat: null,
-        totalLo: null,
-        totalHi: null,
-        drivers: [],
-      };
-    }
+      if (!run) {
+        return {
+          needsForecast: true,
+          runId: null,
+          outOfHorizon: false,
+          horizonEnd: null,
+          generatedAt: null,
+          points: [],
+          totalYhat: null,
+          totalLo: null,
+          totalHi: null,
+          drivers: [],
+          avgUnitPrice: null,
+        };
+      }
 
-    const allPoints = (run.points as unknown as ForecastPoint[] | null) ?? [];
-    const horizonEnd = allPoints.at(-1)?.target_date ?? null;
-    const generatedAt = run.completedAt ? run.completedAt.toISOString() : null;
+      const allPoints = (run.points as unknown as ForecastPoint[] | null) ?? [];
+      const horizonEnd = allPoints.at(-1)?.target_date ?? null;
+      const generatedAt = run.completedAt
+        ? run.completedAt.toISOString()
+        : null;
 
-    const points = allPoints
-      .filter((p) => p.target_date >= from && p.target_date <= to)
-      .sort((a, b) => a.target_date.localeCompare(b.target_date));
+      const points = allPoints
+        .filter((p) => p.target_date >= from && p.target_date <= to)
+        .sort((a, b) => a.target_date.localeCompare(b.target_date));
 
-    if (points.length === 0) {
+      if (points.length === 0) {
+        return {
+          needsForecast: false,
+          runId: run.id,
+          outOfHorizon: true,
+          horizonEnd,
+          generatedAt,
+          points: [],
+          totalYhat: null,
+          totalLo: null,
+          totalHi: null,
+          drivers: [],
+          avgUnitPrice: null,
+        };
+      }
+
+      const allDrivers =
+        (run.drivers as unknown as ForecastDriver[] | null) ?? [];
+      const drivers = allDrivers
+        .filter((d) => d.date >= from && d.date <= to)
+        .sort((a, b) => a.date.localeCompare(b.date));
+
+      let totalYhat = 0;
+      let totalLo = 0;
+      let totalHi = 0;
+      for (const p of points) {
+        totalYhat += p.yhat;
+        totalLo += p.yhat_lo;
+        totalHi += p.yhat_hi;
+      }
+
+      // QA-23 · SOLO se calcula cuando hay puntos en rango (evita una query
+      // extra en los caminos needsForecast/outOfHorizon, que igual no la usan).
+      const avgUnitPrice = await this.avgUnitPriceLast30Days(tx);
+
       return {
         needsForecast: false,
         runId: run.id,
-        outOfHorizon: true,
+        outOfHorizon: false,
         horizonEnd,
         generatedAt,
-        points: [],
-        totalYhat: null,
-        totalLo: null,
-        totalHi: null,
-        drivers: [],
+        points,
+        totalYhat,
+        totalLo,
+        totalHi,
+        drivers,
+        avgUnitPrice,
       };
-    }
+    });
+  }
 
-    const allDrivers =
-      (run.drivers as unknown as ForecastDriver[] | null) ?? [];
-    const drivers = allDrivers
-      .filter((d) => d.date >= from && d.date <= to)
-      .sort((a, b) => a.date.localeCompare(b.date));
-
-    let totalYhat = 0;
-    let totalLo = 0;
-    let totalHi = 0;
-    for (const p of points) {
-      totalYhat += p.yhat;
-      totalLo += p.yhat_lo;
-      totalHi += p.yhat_hi;
-    }
-
-    return {
-      needsForecast: false,
-      runId: run.id,
-      outOfHorizon: false,
-      horizonEnd,
-      generatedAt,
-      points,
-      totalYhat,
-      totalLo,
-      totalHi,
-      drivers,
-    };
+  /**
+   * QA-23 (LOTE B5) · `SUM(total)/SUM(qty)` de `sales_history` en los últimos
+   * {@link AVG_UNIT_PRICE_WINDOW_DAYS} días — el ticket promedio por plato
+   * REAL (S/), usado para DERIVAR (nunca re-etiquetar) una estimación de
+   * ingresos a partir de las unidades que pronostica el modelo. `total`/`qty`
+   * son columnas reales de `sales_history` (`prisma/schema.prisma`), a
+   * diferencia de la serie de demanda (`dailyTotals`) que solo agrega `qty`
+   * (unidades) — ver el bug original: `ChatService.answerFuture` formateaba
+   * `totalYhat` (unidades) como si fuera soles. `null` sin ventas en la
+   * ventana (tenant nuevo) para que el caller NUNCA divida por cero ni
+   * invente un precio. RLS FORCE ya activo (mismo `tx` que el resto del método).
+   */
+  private async avgUnitPriceLast30Days(tx: Tx): Promise<number | null> {
+    const rows = await tx.$queryRaw<
+      { revenue: string | null; units: string | null }[]
+    >(Prisma.sql`
+      SELECT SUM(total)::text AS revenue, SUM(qty)::text AS units
+      FROM sales_history
+      WHERE sold_on >= now() - interval '${Prisma.raw(String(AVG_UNIT_PRICE_WINDOW_DAYS))} days'
+    `);
+    const revenue = rows[0]?.revenue;
+    const units = rows[0]?.units;
+    if (!revenue || !units || Number(units) === 0) return null;
+    return Number(revenue) / Number(units);
   }
 
   /**

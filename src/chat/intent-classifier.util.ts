@@ -76,9 +76,59 @@ const DOMAIN_KEYWORD_RE =
 /** Ir-a-infinitive future tense: "voy/vamos/va/van a vender", "vamos a facturar". */
 const FUTURE_VERB_RE = /\b(voy|vamos|van|va)\s+a\s+[a-záéíóúñ]+(ar|er|ir)\b/;
 
+/**
+ * QA-24 · Simple future tense ("venderé", "ganaré", "tendré" — 1st/2nd/3rd
+ * person, singular/plural), the OTHER way Spanish expresses futurity besides
+ * the ir-a-infinitive construction above. ALL Spanish future-tense verbs,
+ * regular AND irregular, are built as [infinitive or irregular stem] + é/ás/
+ * á/emos/éis/án — and that stem always ends in "r" (it either IS the
+ * infinitive, e.g. vender+é="venderé", or an irregular future stem that keeps
+ * the "r", e.g. tener→tendr+é="tendré", poder→podr+é="podré"). So a word
+ * ending in one of these accented suffixes is, for practical purposes, always
+ * a future-tense verb — the WRITTEN ACCENT is the signal, which is why this
+ * regex runs against `qAccented` (accents preserved) instead of the
+ * diacritic-stripped `q` used everywhere else in this file.
+ *
+ * Known false-positive trade-off (documented, not fixed): a handful of
+ * unrelated words also end in an accented "-rá/-rás" (e.g. "detrás"). Same
+ * accepted imprecision as the rest of this heuristic classifier (see file
+ * JSDoc) — a deterministic gate that's slightly over-eager beats an LLM
+ * round-trip that can hallucinate.
+ */
+const FUTURE_TENSE_ACCENT_RE =
+  /\b[a-zñ]{3,}(ré|rás|rá|remos|réis|rán)(?![a-záéíóúñ])/;
+
 /** Explicit forecast/projection vocabulary — always a future/forecast question. */
 const FORECAST_WORD_RE =
   /\b(pronostic\w*|forecast\w*|proyecc\w*|proyectad\w*|predicc\w*|predic\w*)\b/;
+
+/**
+ * QA-24 · Nombre de mes en español (incluye "setiembre", grafía usual en
+ * Perú) → número de mes (1-12). Un nombre de mes NO es, por sí solo, una
+ * señal de futuro (a diferencia de "mañana"/"fin de semana"/"próximo mes":
+ * esas frases son intrínsecamente prospectivas, pero "diciembre" puede
+ * aparecer en una pregunta histórica igual de válida, "¿cuánto vendí en
+ * diciembre?"). Por eso {@link resolveMonthRange} solo se consulta cuando
+ * YA hay una señal de futuro por otra vía (verbo, "pronóstico", etc.) — ver
+ * `classifyIntent`.
+ */
+const MONTH_NUMBER_BY_NAME: Record<string, number> = {
+  enero: 1,
+  febrero: 2,
+  marzo: 3,
+  abril: 4,
+  mayo: 5,
+  junio: 6,
+  julio: 7,
+  agosto: 8,
+  septiembre: 9,
+  setiembre: 9,
+  octubre: 10,
+  noviembre: 11,
+  diciembre: 12,
+};
+const MONTH_NAME_RE =
+  /\b(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)\b/;
 
 /**
  * Vague filler phrases with no specific business noun attached — the exact
@@ -148,6 +198,32 @@ function resolveExplicitRange(
   return null;
 }
 
+/**
+ * QA-24 · Resolves a bare month name ("diciembre") to the NEXT occurrence of
+ * that calendar month relative to `todayLima` — never the past. If the named
+ * month is the current month or later this year, it resolves within the
+ * current year; otherwise it rolls over to next year (mirrors the rollover
+ * `resolveExplicitRange` already does for "el próximo mes" in December).
+ * `null` when no month name is present. Only called from `classifyIntent`
+ * AFTER a future signal was already confirmed by some other means (see the
+ * `MONTH_NAME_RE` JSDoc for why a bare month name must not, by itself, imply
+ * futurity).
+ */
+function resolveMonthRange(q: string, todayLima: string): ChatDateRange | null {
+  const match = MONTH_NAME_RE.exec(q);
+  if (!match) return null;
+
+  const monthName = match[1];
+  const monthIndex = MONTH_NUMBER_BY_NAME[monthName];
+  const [todayYear, todayMonth] = todayLima.split('-').map(Number) as [
+    number,
+    number,
+  ];
+  const year = monthIndex < todayMonth ? todayYear + 1 : todayYear;
+  const from = `${year}-${String(monthIndex).padStart(2, '0')}-01`;
+  return { from, to: lastDayOfMonth(from), label: monthName };
+}
+
 /** No explicit phrase, but a future signal was found some other way — default to a 1-week window. */
 function defaultFutureRange(todayLima: string): ChatDateRange {
   const from = addDays(todayLima, 1);
@@ -165,10 +241,11 @@ function defaultFutureRange(todayLima: string): ChatDateRange {
  * a fixed string in tests for determinism.
  *
  * Branch order matters:
- *   1. Future signal (explicit date phrase, ir-a-infinitive, or forecast
- *      vocabulary) → 'future'. Checked FIRST because a future business
- *      question ("¿cuánto voy a vender este fin de semana?") also contains a
- *      domain keyword ("vender") — future takes priority over historical.
+ *   1. Future signal (explicit date phrase, ir-a-infinitive, simple future
+ *      tense — QA-24 — or forecast vocabulary) → 'future'. Checked FIRST
+ *      because a future business question ("¿cuánto voy a vender este fin de
+ *      semana?") also contains a domain keyword ("vender") — future takes
+ *      priority over historical.
  *   2. No future signal, no domain keyword, vague filler phrase → 'ambiguous'.
  *   3. No future signal, no domain keyword, no vague phrase → 'out_of_domain'.
  *   4. Otherwise (has a domain keyword) → 'historical' (existing nl2sql flow,
@@ -179,17 +256,29 @@ export function classifyIntent(
   todayLima: string,
 ): ChatIntent {
   const q = normalize(question);
+  // QA-24 · Kept SEPARATE from `q` (accents preserved, only lowercased) —
+  // `FUTURE_TENSE_ACCENT_RE` needs the written accent as its signal, which
+  // `normalize()` strips for every other check in this function.
+  const qAccented = question.toLowerCase();
 
   const explicitRange = resolveExplicitRange(q, todayLima);
   const hasFutureSignal =
     explicitRange !== null ||
     FUTURE_VERB_RE.test(q) ||
+    FUTURE_TENSE_ACCENT_RE.test(qAccented) ||
     FORECAST_WORD_RE.test(q);
 
   if (hasFutureSignal) {
+    // QA-24 · A bare month name ("diciembre") only resolves the range when we
+    // already know (from the check above) the question IS about the future —
+    // see `resolveMonthRange` JSDoc for why it can't set `hasFutureSignal` on
+    // its own. Only consulted when `resolveExplicitRange` found nothing more
+    // specific (e.g. "el próximo mes" still wins over a stray month mention).
+    const monthRange =
+      explicitRange === null ? resolveMonthRange(q, todayLima) : null;
     return {
       kind: 'future',
-      range: explicitRange ?? defaultFutureRange(todayLima),
+      range: explicitRange ?? monthRange ?? defaultFutureRange(todayLima),
     };
   }
 

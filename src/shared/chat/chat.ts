@@ -59,6 +59,25 @@ export const chatDateRangeSchema = z.object({
 export type ChatDateRange = z.infer<typeof chatDateRangeSchema>;
 
 /**
+ * QA-23 (LOTE B5) · Estimación de ingresos (S/) DERIVADA de las unidades
+ * pronosticadas (`totalYhat`/`totalLo`/`totalHi`, que están en UNIDADES —
+ * platos vendidos, ver `unitLabel`) × el ticket promedio por plato de los
+ * últimos `basisDays` días de `sales_history`. Es una CONVERSIÓN declarada,
+ * no una serie de ingresos pronosticada de forma independiente — el bug
+ * original (QA-23) fue re-etiquetar unidades como si ya fueran soles.
+ */
+export const chatEstimatedRevenueSchema = z.object({
+  total: z.number(),
+  lo: z.number(),
+  hi: z.number(),
+  /** Ticket promedio por plato (S/) usado para la derivación. */
+  avgUnitPrice: z.number(),
+  /** Ventana (días) de `sales_history` de la que salió `avgUnitPrice`. */
+  basisDays: z.number().int(),
+});
+export type ChatEstimatedRevenue = z.infer<typeof chatEstimatedRevenueSchema>;
+
+/**
  * LOTE B3 · Metadata estructurada de una respuesta `kind: 'future'` — la
  * misma info que ya narra `answer` en texto plano, pero en forma consumible
  * por el frontend (badges/gráfico) sin tener que parsear el string. Viaja
@@ -70,10 +89,18 @@ export const chatForecastMetaSchema = z.object({
   /** Corrida (`ForecastRun`) de la que salen los puntos — para trazabilidad/auditoría. */
   runId: z.string().uuid(),
   range: chatDateRangeSchema,
-  /** Suma de `yhat`/`yhat_lo`/`yhat_hi` de los puntos dentro del rango. */
+  /**
+   * QA-23 · Suma de `yhat`/`yhat_lo`/`yhat_hi` de los puntos dentro del
+   * rango. UNIDADES (platos vendidos), NO soles — ver `unitLabel`. Antes de
+   * este fix el `answer` los formateaba con prefijo "S/", que era el bug.
+   */
   totalYhat: z.number(),
   totalLo: z.number(),
   totalHi: z.number(),
+  /** QA-23 · Etiqueta de la unidad real de `totalYhat`/`totalLo`/`totalHi` (siempre "platos" para `scope: 'total'`). */
+  unitLabel: z.string(),
+  /** QA-23 · Estimación de ingresos DERIVADA; `null` sin ventas recientes para calcular el ticket promedio (ver `chatEstimatedRevenueSchema`). */
+  estimatedRevenue: chatEstimatedRevenueSchema.nullable(),
   /** Puntos día-a-día dentro del rango (para un gráfico, si el frontend lo quiere). */
   points: z.array(forecastPointSchema),
   /** Factores exógenos (feriados/quincena/clima) dentro del mismo rango. */

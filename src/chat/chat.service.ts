@@ -7,10 +7,14 @@ import {
   type HttpException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { ForecastingService } from '../forecasting/forecasting.service';
+import {
+  AVG_UNIT_PRICE_WINDOW_DAYS,
+  ForecastingService,
+} from '../forecasting/forecasting.service';
 import { PrismaService } from '../platform/prisma/prisma.service';
 import { type ChatQueryResponse, type CoreAiAnswerRequest } from '../shared';
 import { CoreAiChatClient } from './core-ai-chat.client';
+import { estimateRevenue, formatDriverLabels } from './forecast-answer.util';
 import { classifyIntent, type ChatDateRange } from './intent-classifier.util';
 import { todayLima } from './lima-date.util';
 import { ANALYTICS_SCHEMA_CONTEXT } from './schema-context';
@@ -27,10 +31,10 @@ import { validateSql, MAX_ROWS } from './sql-validator.util';
  */
 const OUT_OF_DOMAIN_ANSWER =
   'Solo puedo responder sobre los datos de tu negocio (ventas, insumos, ' +
-  'recetas, empleados, pronósticos, etc.). Probá con una pregunta sobre tu restaurante.';
+  'recetas, empleados, pronósticos, etc.). Prueba con una pregunta sobre tu restaurante.';
 
 const AMBIGUOUS_ANSWER =
-  'Tu pregunta es un poco ambigua. ¿Podés ser más específico? Por ejemplo: ' +
+  'Tu pregunta es un poco ambigua. ¿Puedes ser más específico? Por ejemplo: ' +
   '"¿cuáles fueron mis ventas de esta semana?", "¿qué insumos están por ' +
   'agotarse?" o "¿cuánto voy a vender este fin de semana?".';
 
@@ -38,6 +42,16 @@ const NEEDS_FORECAST_ANSWER =
   'Todavía no hay ningún pronóstico generado para tu negocio, así que no ' +
   'puedo responder preguntas sobre el futuro. Genera un pronóstico desde ' +
   'la lista de compras para que pueda usarlo en el chat.';
+
+/**
+ * QA-23 (LOTE B5) · La serie `scope: 'total'` que alimenta el forecast agrega
+ * `qty` de `sales_history` (unidades — ver `sales-aggregation.util.ts`), NUNCA
+ * dinero. Este es el shape ÚNICO que hoy expone `ForecastingService`, así que
+ * la etiqueta es una constante fija (no viene de la corrida) — si algún día
+ * se agrega un `scope` de ingresos reales, esta constante deja de ser válida
+ * y debe volverse dinámica.
+ */
+const FORECAST_UNIT_LABEL = 'platos';
 
 /**
  * Postgres SQLSTATE for `query_canceled` — raised when our own
@@ -148,7 +162,7 @@ export class ChatService {
       return this.staticResponse(
         'future',
         `Tu pregunta cae fuera del rango que cubre el último pronóstico.${horizonHint} ` +
-          'Generá un nuevo pronóstico con un horizonte más amplio para poder responder eso.',
+          'Genera un nuevo pronóstico con un horizonte más amplio para poder responder eso.',
       );
     }
 
@@ -158,15 +172,35 @@ export class ChatService {
     const totalLo = result.totalLo as number;
     const totalHi = result.totalHi as number;
 
+    // QA-22 · Dedupe labels before narrating them — a full weekend brings 2
+    // `weekend` drivers (sat+sun) with the SAME label; without this the
+    // sentence read "Incluye el efecto de Fin de semana, Fin de semana."
     const driverText =
       result.drivers.length > 0
-        ? ` Incluye el efecto de ${result.drivers.map((d) => d.label).join(', ')}.`
+        ? ` Incluye el efecto de ${formatDriverLabels(result.drivers.map((d) => d.label))}.`
         : '';
 
+    // QA-23 · `totalYhat`/`totalLo`/`totalHi` are UNITS (platos), never S/ —
+    // see `FORECAST_UNIT_LABEL` and `ForecastingService.demandSeries`
+    // (aggregates `qty`, not `qty × unitPrice`). Rounded to whole dishes for
+    // the sentence (you can't sell half a plate) — the raw, unrounded values
+    // still travel in `forecast.totalYhat/totalLo/totalHi` for any consumer
+    // that wants full precision (e.g. a chart).
+    const estimatedRevenue = estimateRevenue(
+      { total: totalYhat, lo: totalLo, hi: totalHi },
+      result.avgUnitPrice,
+      AVG_UNIT_PRICE_WINDOW_DAYS,
+    );
+    const revenueText = estimatedRevenue
+      ? ` Estimado en S/ ${estimatedRevenue.total.toFixed(2)} según tu ticket ` +
+        `promedio por plato de los últimos ${estimatedRevenue.basisDays} días ` +
+        `(S/ ${estimatedRevenue.avgUnitPrice.toFixed(2)}/plato).`
+      : '';
+
     const answer =
-      `Se proyectan S/ ${totalYhat.toFixed(2)} para ${range.label} ` +
-      `(banda estimada S/ ${totalLo.toFixed(2)}–S/ ${totalHi.toFixed(2)}).` +
-      `${driverText} Nota: esto es una proyección del modelo, no una venta confirmada.`;
+      `Se proyectan ~${Math.round(totalYhat)} ${FORECAST_UNIT_LABEL} para ${range.label} ` +
+      `(banda estimada ${Math.round(totalLo)}–${Math.round(totalHi)} ${FORECAST_UNIT_LABEL}).` +
+      `${revenueText}${driverText} Nota: esto es una proyección del modelo, no una venta confirmada.`;
 
     return {
       answer,
@@ -182,6 +216,8 @@ export class ChatService {
         totalYhat,
         totalLo,
         totalHi,
+        unitLabel: FORECAST_UNIT_LABEL,
+        estimatedRevenue,
         points: result.points,
         drivers: result.drivers,
       },
@@ -339,12 +375,12 @@ export class ChatService {
 
     if (pgCode === POSTGRES_QUERY_CANCELED) {
       return new GatewayTimeoutException(
-        'La consulta tardó demasiado en responder. Probá acotar el rango de fechas o ser más específico.',
+        'La consulta tardó demasiado en responder. Prueba acotar el rango de fechas o ser más específico.',
       );
     }
 
     return new BadGatewayException(
-      'No pude ejecutar la consulta que generé para tu pregunta. Probá reformularla de otra manera.',
+      'No pude ejecutar la consulta que generé para tu pregunta. Prueba reformularla de otra manera.',
     );
   }
 
