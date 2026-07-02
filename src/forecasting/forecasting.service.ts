@@ -13,12 +13,15 @@ import { FORECAST_QUEUE } from '../platform/queue/redis-connection';
 import {
   type BacktestMetrics,
   type CoreAiForecastResponse,
+  type ForecastContextStatus,
+  type ForecastDriver,
+  type ForecastInsightsResponse,
   type ForecastPoint,
   type ForecastRunStatus,
   type RunForecastInput,
   type ShoppingSuggestionsResponse,
 } from '../shared';
-import { CoreAiClient } from './core-ai.client';
+import { type CoreAiLocation, CoreAiClient } from './core-ai.client';
 import {
   compareForecastVsActual,
   type ForecastValidation,
@@ -35,6 +38,14 @@ const MIN_POINTS_TO_FORECAST = 2;
 // Errores transitorios de infra (core-ai caído/lento) → vale reintentar el job.
 // El 422 (histórico insuficiente) es terminal: no se reintenta.
 const TRANSIENT_STATUSES = new Set([502, 503, 504]);
+
+// HU-08-07 (fase 2) · Toda corrida de negocio pide contexto exógeno (calendario
+// peruano + clima) a core-ai; el motor SIEMPRE se pide "auto" — core-ai decide
+// si "ml" aplica según la historia disponible (nunca se hardcodea "ml" acá, ver
+// `team-core-ai/README.md` §HU-08-07). No es configurable por el cliente: es una
+// decisión de negocio, no una preferencia del request.
+const USE_CONTEXT = true;
+const DEFAULT_ENGINE = 'auto';
 
 /** Respuesta del seam de demanda: la serie + metadatos de calidad. Lo que `points`
  *  contiene es exactamente el `history` que consume `core-ai` (`frequency:"D"`). */
@@ -93,6 +104,10 @@ export interface ForecastRunView {
   dataQuality: string | null;
   points: ForecastPoint[] | null;
   backtest: BacktestMetrics | null;
+  // HU-08-07 (fase 2) · [] / null en corridas previas a la migración (lectura
+  // hacia atrás compatible) o cuando el contexto no aportó factores en el horizonte.
+  drivers: ForecastDriver[];
+  contextStatus: ForecastContextStatus | null;
   error: string | null;
   createdAt: string;
   completedAt: string | null;
@@ -169,6 +184,12 @@ export class ForecastingService {
             backtest:
               (result.forecast.backtest as unknown as Prisma.InputJsonValue) ??
               Prisma.DbNull,
+            // HU-08-07 (fase 2) · drivers/contextStatus tal cual los devolvió
+            // core-ai (siempre presentes: `use_context` va SIEMPRE true en
+            // corridas de negocio — ver `computeForecast`).
+            drivers: result.forecast
+              .drivers as unknown as Prisma.InputJsonValue,
+            contextStatus: result.forecast.context_status,
             completedAt: new Date(),
           },
         }),
@@ -322,8 +343,15 @@ export class ForecastingService {
           runId: null,
           needsForecast: true,
           suggestions: [],
+          drivers: [],
+          contextStatus: null,
         };
       }
+
+      // HU-08-07 (fase 2): estado del contexto de la corrida usada — viaja tal
+      // cual en toda respuesta que sí encontró una corrida (aunque termine sin
+      // sugerencias), para que el frontend siempre pueda mostrarlo.
+      const contextStatus = run.contextStatus as ForecastContextStatus | null;
 
       // Step 2: sum yhat from today (Lima) forward for up to `horizon` days.
       const today = this.todayLima();
@@ -331,6 +359,18 @@ export class ForecastingService {
       const futurePoints = points
         .filter((p) => p.target_date >= today)
         .slice(0, horizon);
+
+      // Drivers dentro de la misma ventana de días que `futurePoints` (no todo
+      // el horizonte original de la corrida, que puede estar parcialmente en
+      // el pasado si la corrida es de hace unos días).
+      const windowEnd = futurePoints.at(-1)?.target_date;
+      const allDrivers =
+        (run.drivers as unknown as ForecastDriver[] | null) ?? [];
+      const drivers = windowEnd
+        ? allDrivers
+            .filter((d) => d.date >= today && d.date <= windowEnd)
+            .sort((a, b) => a.date.localeCompare(b.date))
+        : [];
 
       if (futurePoints.length === 0) {
         // All forecast points are in the past — client should trigger a new run.
@@ -340,6 +380,8 @@ export class ForecastingService {
           runId: run.id,
           needsForecast: true,
           suggestions: [],
+          drivers: [],
+          contextStatus,
         };
       }
 
@@ -368,6 +410,8 @@ export class ForecastingService {
           runId: run.id,
           needsForecast: false,
           suggestions: [],
+          drivers,
+          contextStatus,
         };
       }
 
@@ -475,6 +519,8 @@ export class ForecastingService {
         runId: run.id,
         needsForecast: false,
         suggestions,
+        drivers,
+        contextStatus,
       };
     });
   }
@@ -487,6 +533,27 @@ export class ForecastingService {
     return new Date().toLocaleDateString('en-CA', {
       timeZone: 'America/Lima',
     });
+  }
+
+  /**
+   * HU-08-07 (fase 2) · Coordenadas del tenant para el clima del forecast
+   * contextual. Solo plumbing: sin UI de config todavía (fase 3), así que la
+   * mayoría de tenants tendrán `latitude`/`longitude` en `null`. Cuando faltan,
+   * se devuelve `undefined` (no se manda `location` a core-ai) para que
+   * core-ai aplique su propio default (Lima) — evita duplicar esa constante
+   * en dos stacks. `tenant_id` SIEMPRE del JWT; lectura vía `runInTenant` (RLS).
+   */
+  private async resolveTenantLocation(
+    tenantId: string,
+  ): Promise<CoreAiLocation | undefined> {
+    const tenant = await this.prisma.runInTenant(tenantId, (tx) =>
+      tx.tenant.findUnique({
+        where: { id: tenantId },
+        select: { latitude: true, longitude: true },
+      }),
+    );
+    if (tenant?.latitude == null || tenant?.longitude == null) return undefined;
+    return { latitude: tenant.latitude, longitude: tenant.longitude };
   }
 
   /**
@@ -512,12 +579,20 @@ export class ForecastingService {
       );
     }
 
+    const location = await this.resolveTenantLocation(tenantId);
     const forecast = await this.coreAi.runForecast({
       series_id: series.seriesId,
       frequency: series.frequency,
       horizon: input.horizon,
       history: series.points,
-      engine: input.engine,
+      // HU-08-07 (fase 2): "auto" (nunca "ml" hardcodeado) + use_context SIEMPRE
+      // true para corridas de negocio — core-ai decide si "ml" aplica según la
+      // historia disponible y degrada solo si no alcanza. `input.engine` sigue
+      // existiendo por si algún caller quiere forzar otro motor explícito
+      // (p. ej. QA comparando `seasonalnaive` vs `auto`).
+      engine: input.engine ?? DEFAULT_ENGINE,
+      use_context: USE_CONTEXT,
+      location,
     });
 
     return {
@@ -652,10 +727,101 @@ export class ForecastingService {
       spanDays: run.spanDays,
       dataQuality: run.dataQuality,
       points: (run.points as unknown as ForecastPoint[] | null) ?? null,
-      backtest: (run.backtest as unknown as BacktestMetrics | null) ?? null,
+      backtest: this.normalizeBacktest(run.backtest),
+      // HU-08-07 (fase 2) · [] / null en corridas previas a la migración —
+      // lectura hacia atrás compatible (columnas nuevas, filas viejas en NULL).
+      drivers: (run.drivers as unknown as ForecastDriver[] | null) ?? [],
+      contextStatus: run.contextStatus as ForecastContextStatus | null,
       error: run.error,
       createdAt: run.createdAt.toISOString(),
       completedAt: run.completedAt ? run.completedAt.toISOString() : null,
+    };
+  }
+
+  // `model_smape_no_context` puede faltar en JSON persistido antes de HU-08-07
+  // (la columna `backtest` es la misma; solo cambió el shape del valor) —
+  // se normaliza a `null` explícito para que la vista nunca exponga `undefined`.
+  private normalizeBacktest(
+    raw: Prisma.JsonValue | null,
+  ): BacktestMetrics | null {
+    const backtest = raw as unknown as BacktestMetrics | null;
+    if (!backtest) return null;
+    return {
+      ...backtest,
+      model_smape_no_context: backtest.model_smape_no_context ?? null,
+    };
+  }
+
+  /**
+   * HU-08-07 (fase 2) · Resumen narrable para el dashboard de gestión: toma la
+   * última corrida `completed` (`scope=total`) del tenant y expone los
+   * factores exógenos que caen dentro de lo que queda de su horizonte
+   * (`date >= hoy`), el estado del contexto y la comparativa de backtest
+   * con/sin contexto. `needsForecast: true` (200, no 404) si el tenant aún no
+   * completó ninguna corrida — igual criterio que `shoppingSuggestions`, para
+   * que el dashboard pueda mostrar un estado vacío en vez de manejar un error.
+   * `tenant_id` SIEMPRE del JWT; `runInTenant` (RLS FORCE). CASL `read Report`
+   * (gateado en el controller, igual que el resto de reportes de gestión).
+   */
+  async getInsights(tenantId: string): Promise<ForecastInsightsResponse> {
+    const run = await this.prisma.runInTenant(tenantId, (tx) =>
+      tx.forecastRun.findFirst({
+        where: { status: 'completed', scope: 'total' },
+        orderBy: { completedAt: 'desc' },
+      }),
+    );
+
+    if (!run) {
+      return {
+        runId: null,
+        status: null,
+        contextStatus: null,
+        horizon: null,
+        generatedAt: null,
+        upcomingDrivers: [],
+        backtest: null,
+        needsForecast: true,
+      };
+    }
+
+    const today = this.todayLima();
+    const drivers = (run.drivers as unknown as ForecastDriver[] | null) ?? [];
+    const upcomingDrivers = drivers
+      .filter((d) => d.date >= today)
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    const backtest = this.normalizeBacktest(run.backtest);
+
+    return {
+      runId: run.id,
+      status: run.status as ForecastRunStatus,
+      contextStatus: run.contextStatus as ForecastContextStatus | null,
+      horizon: run.horizon,
+      generatedAt: run.completedAt ? run.completedAt.toISOString() : null,
+      upcomingDrivers,
+      backtest: backtest ? this.toInsightsBacktest(backtest) : null,
+      needsForecast: false,
+    };
+  }
+
+  // Deriva la mejora relativa con-contexto-vs-sin-contexto a partir del
+  // backtest crudo. `null` salvo que exista `model_smape_no_context` (motor
+  // "ml" con contexto) y sea > 0 (evita dividir por 0 / inventar una mejora).
+  private toInsightsBacktest(
+    backtest: BacktestMetrics,
+  ): ForecastInsightsResponse['backtest'] {
+    const noContext = backtest.model_smape_no_context ?? null;
+    const contextImprovementPct =
+      noContext !== null && noContext > 0
+        ? ((noContext - backtest.model_smape) / noContext) * 100
+        : null;
+
+    return {
+      modelSmape: backtest.model_smape,
+      baselineSmape: backtest.baseline_smape,
+      improvementPct: backtest.improvement_pct,
+      modelSmapeNoContext: noContext,
+      contextImprovementPct,
     };
   }
 }

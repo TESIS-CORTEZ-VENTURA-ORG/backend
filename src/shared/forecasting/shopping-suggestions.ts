@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { forecastContextStatusSchema, forecastDriverSchema } from './forecast';
 
 /**
  * HU-08-06 · Contrato de sugerencias de compra basadas en pronóstico (E08).
@@ -14,6 +15,10 @@ import { z } from 'zod';
  *  - Solo corridas status='completed'; las 'running'/'failed' se ignoran.
  *  - shortfall = forecastConsumption − currentStock (siempre > 0 en la lista).
  *  - suggestedQty = shortfall (puede ajustarse a lotes de compra en futuras HU).
+ *  - HU-08-07 (fase 2): `drivers`/`contextStatus` viajan tal cual la corrida
+ *    usada, para que el frontend narre el porqué de un shortfall (p. ej.
+ *    "Fiestas Patrias en 12 días: +35% demanda proyectada" junto al insumo
+ *    que va a faltar). `drivers` ya viene acotado al horizonte por core-ai.
  */
 
 /** Query params de `GET /forecasting/shopping-suggestions`. */
@@ -52,6 +57,14 @@ export const shoppingSuggestionsResponseSchema = z.object({
   /** true cuando no existe ninguna corrida completada para el tenant. */
   needsForecast: z.boolean(),
   suggestions: z.array(shoppingSuggestionItemSchema),
+  /**
+   * HU-08-07 (fase 2) · Factores exógenos dentro del horizonte de la corrida
+   * usada (calendario/clima) — `[]` si `needsForecast` o la corrida no tuvo
+   * contexto. Permite narrar el shortfall junto al evento que lo explica.
+   */
+  drivers: z.array(forecastDriverSchema),
+  /** Estado del contexto de la corrida usada; `null` si `needsForecast`. */
+  contextStatus: forecastContextStatusSchema.nullable(),
 });
 export type ShoppingSuggestionsResponse = z.infer<
   typeof shoppingSuggestionsResponseSchema

@@ -22,6 +22,7 @@ import {
   shoppingSuggestionsQuerySchema,
   type ApiResponse,
   type DemandSeriesQueryInput,
+  type ForecastInsightsResponse,
   type JwtClaims,
   type PredictionsQueryInput,
   type RunForecastInput,
@@ -144,5 +145,22 @@ export class ForecastingController {
         query.horizon,
       ),
     );
+  }
+
+  /**
+   * HU-08-07 (fase 2) · Resumen narrable del contexto exógeno para el dashboard
+   * de gestión: próximos factores (feriados/eventos gastronómicos/clima/fin de
+   * semana) dentro del horizonte de la última corrida completada, estado del
+   * contexto (`full`/`calendar_only`) y la mejora del backtest con/sin
+   * contexto. `needsForecast: true` (200) si aún no hay corrida — igual
+   * criterio que `shopping-suggestions`. Información de gestión → `read
+   * Report`, staff → 403 (mismo gate que el resto de reportes).
+   */
+  @Get('insights')
+  @RequireAbility('read', 'Report')
+  async insights(
+    @CurrentUser() claims: JwtClaims,
+  ): Promise<ApiResponse<ForecastInsightsResponse>> {
+    return ok(await this.forecasting.getInsights(claims.tenant_id));
   }
 }

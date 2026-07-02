@@ -14,13 +14,26 @@ import { type HistoryPoint } from './sales-aggregation.util';
 // la request de NestJS colgada indefinidamente (agotando recursos).
 const DEFAULT_TIMEOUT_MS = 15_000;
 
-/** Body que espera `core-ai` en `POST /forecast/run` (snake_case, contrato Python). */
+/** Coordenadas para el clima (Open-Meteo) del forecast contextual (HU-08-07). */
+export interface CoreAiLocation {
+  latitude: number;
+  longitude: number;
+}
+
+/**
+ * Body que espera `core-ai` en `POST /forecast/run` (snake_case, contrato Python).
+ * `use_context`/`location` son opcionales y retrocompatibles (HU-08-07): omitirlos
+ * reproduce el comportamiento previo (`drivers: []`, `context_status: "off"`, sin
+ * llamadas de red). `location` ausente → core-ai usa su default (Lima).
+ */
 export interface CoreAiForecastRequest {
   series_id: string;
   frequency: 'D';
   horizon: number;
   history: HistoryPoint[];
   engine?: string;
+  use_context?: boolean;
+  location?: CoreAiLocation;
 }
 
 /**

@@ -26,6 +26,33 @@ const VALID_RESPONSE = {
   backtest: null,
 };
 
+// HU-08-07 · Shape con contexto activado: drivers + context_status "full" +
+// backtest con la comparativa model_smape_no_context (motor "ml").
+const CONTEXT_RESPONSE = {
+  series_id: 'total',
+  engine: 'ml',
+  model: 'LightGBM',
+  baseline: 'SeasonalNaive',
+  frequency: 'D',
+  points: [{ target_date: '2024-01-03', yhat: 11, yhat_lo: 8, yhat_hi: 14 }],
+  backtest: {
+    holdout_size: 14,
+    model_smape: 6.8,
+    baseline_smape: 8.1,
+    improvement_pct: 16.1,
+    model_smape_no_context: 11.0,
+  },
+  drivers: [
+    {
+      date: '2024-01-03',
+      kind: 'holiday',
+      label: 'Año Nuevo',
+      impact_pct: -5.8,
+    },
+  ],
+  context_status: 'full',
+};
+
 function jsonResponse(body: unknown, status = 200): Response {
   return {
     ok: status >= 200 && status < 300,
@@ -103,5 +130,75 @@ describe('CoreAiClient', () => {
     await expect(
       new CoreAiClient().runForecast(REQUEST),
     ).rejects.toBeInstanceOf(BadGatewayException);
+  });
+
+  // HU-08-07 (fase 2) — contexto exógeno: use_context/location viajan tal cual
+  // en el body, y drivers/context_status/model_smape_no_context se parsean.
+  describe('HU-08-07 · contexto exógeno', () => {
+    it('serializa use_context y location en el body cuando se piden', async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(jsonResponse(CONTEXT_RESPONSE));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await new CoreAiClient().runForecast({
+        ...REQUEST,
+        engine: 'auto',
+        use_context: true,
+        location: { latitude: -12.046, longitude: -77.043 },
+      });
+
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const body = JSON.parse(init.body as string) as Record<string, unknown>;
+      expect(body.use_context).toBe(true);
+      expect(body.location).toEqual({ latitude: -12.046, longitude: -77.043 });
+      expect(body.engine).toBe('auto');
+    });
+
+    it('omite location cuando no se pasa (core-ai aplica su default Lima)', async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(jsonResponse(CONTEXT_RESPONSE));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await new CoreAiClient().runForecast({ ...REQUEST, use_context: true });
+
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const body = JSON.parse(init.body as string) as Record<string, unknown>;
+      expect(body.use_context).toBe(true);
+      expect('location' in body).toBe(false);
+    });
+
+    it('parsea drivers, context_status y model_smape_no_context', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(jsonResponse(CONTEXT_RESPONSE)),
+      );
+
+      const result = await new CoreAiClient().runForecast({
+        ...REQUEST,
+        use_context: true,
+      });
+
+      expect(result.context_status).toBe('full');
+      expect(result.drivers).toHaveLength(1);
+      expect(result.drivers[0]?.kind).toBe('holiday');
+      expect(result.backtest?.model_smape_no_context).toBe(11.0);
+    });
+
+    it('request legacy (sin use_context/location) sigue funcionando idéntico a antes', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(jsonResponse(VALID_RESPONSE)),
+      );
+
+      // VALID_RESPONSE no trae drivers/context_status/model_smape_no_context —
+      // el contrato retrocompatible los defaultea a []/"off"/null.
+      const result = await new CoreAiClient().runForecast(REQUEST);
+
+      expect(result.drivers).toEqual([]);
+      expect(result.context_status).toBe('off');
+      expect(result.backtest).toBeNull();
+    });
   });
 });

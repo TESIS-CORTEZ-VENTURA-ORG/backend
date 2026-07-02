@@ -28,31 +28,40 @@ model Tenant {
   capacity      Int? // aforo
   businessHours Json?   @map("business_hours")
 
+  // HU-08-07 (fase 2) · Coordenadas del local, usadas por core-ai para el
+  // clima (Open-Meteo) del forecast contextual. Nullable + sin default de
+  // negocio a propósito: SOLO plumbing en esta fase, no hay UI de config
+  // todavía (decisión fase 3). Si están en null, `ForecastingService` omite
+  // `location` en la llamada a core-ai y el propio core-ai usa su default
+  // (Lima, -12.046/-77.043) — evita duplicar esa constante en dos stacks.
+  latitude  Float?
+  longitude Float?
+
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
 
-  users              User[]
-  ingredients        Ingredient[]
-  unitsOfMeasure     UnitOfMeasure[]
-  categories         Category[]
-  suppliers          Supplier[]
-  recipes            Recipe[]
-  menuCategories     MenuCategory[]
-  menuItems          MenuItem[]
-  menuModifiers      MenuModifier[]
-  menuAvailability   MenuAvailability[]
-  zones              Zone[]
-  diningTables       DiningTable[]
-  orders             Order[]
-  kitchenStations    KitchenStation[]
-  inventoryMovements InventoryMovement[]
-  purchaseOrders     PurchaseOrder[]
-  sales              Sale[]
-  payments           Payment[]
-  cashCloses         CashClose[]
-  overheadCosts      OverheadCost[]
-  costingCloses      CostingClose[]
+  users                   User[]
+  ingredients             Ingredient[]
+  unitsOfMeasure          UnitOfMeasure[]
+  categories              Category[]
+  suppliers               Supplier[]
+  recipes                 Recipe[]
+  menuCategories          MenuCategory[]
+  menuItems               MenuItem[]
+  menuModifiers           MenuModifier[]
+  menuAvailability        MenuAvailability[]
+  zones                   Zone[]
+  diningTables            DiningTable[]
+  orders                  Order[]
+  kitchenStations         KitchenStation[]
+  inventoryMovements      InventoryMovement[]
+  purchaseOrders          PurchaseOrder[]
+  sales                   Sale[]
+  payments                Payment[]
+  cashCloses              CashClose[]
+  overheadCosts           OverheadCost[]
+  costingCloses           CostingClose[]
   notifications           Notification[]
   notificationPreferences NotificationPreference[]
   salesHistory            SalesHistory[]
@@ -136,6 +145,13 @@ model Order {
   status          String    @default("open")
   voidReason      String?   @map("void_reason")
   idempotencyKey  String?   @map("idempotency_key")
+  // QA-02 (bugfix) · Descuento aplicado a la cuenta (opcional). type: pct|amount.
+  // value: 0-100 si pct, monto PEN si amount. reason es obligatorio cuando se
+  // aplica (auditoría/negocio) — validado en el DTO, no a nivel de columna
+  // porque el descuento puede limpiarse (los 3 campos vuelven a null).
+  discountType    String?   @map("discount_type")
+  discountValue   Decimal?  @map("discount_value") @db.Decimal(12, 2)
+  discountReason  String?   @map("discount_reason")
   openedAt        DateTime  @default(now()) @map("opened_at")
   sentToKitchenAt DateTime? @map("sent_to_kitchen_at")
   createdAt       DateTime  @default(now()) @map("created_at")
@@ -160,22 +176,29 @@ model Order {
 // status: issued | void. El envío electrónico a SUNAT es externo/fuera de alcance
 // (schema preparado). docType: boleta | factura.
 model Sale {
-  id          String   @id @default(uuid()) @db.Uuid
-  tenantId    String   @map("tenant_id") @db.Uuid
-  orderId     String   @map("order_id") @db.Uuid
-  serie       String
-  number      Int
-  docType     String   @map("doc_type")
-  customer    String?
-  customerDoc String?  @map("customer_doc")
-  subtotal    Decimal  @db.Decimal(12, 2)
-  igv         Decimal  @db.Decimal(12, 2)
-  total       Decimal  @db.Decimal(12, 2)
-  status      String   @default("issued")
-  voidReason  String?  @map("void_reason")
-  issuedAt    DateTime @default(now()) @map("issued_at")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  id             String   @id @default(uuid()) @db.Uuid
+  tenantId       String   @map("tenant_id") @db.Uuid
+  orderId        String   @map("order_id") @db.Uuid
+  serie          String
+  number         Int
+  docType        String   @map("doc_type")
+  customer       String?
+  customerDoc    String?  @map("customer_doc")
+  // QA-02 (bugfix) · Snapshot del descuento AL MOMENTO DEL COBRO (el ticket es
+  // inmutable; si la orden cambiara después, el comprobante no debe mutar).
+  // discountAmount = monto PEN ya restado del bruto (grossTotal = total + discountAmount).
+  discountType   String?  @map("discount_type")
+  discountValue  Decimal? @map("discount_value") @db.Decimal(12, 2)
+  discountReason String?  @map("discount_reason")
+  discountAmount Decimal  @default(0) @map("discount_amount") @db.Decimal(12, 2)
+  subtotal       Decimal  @db.Decimal(12, 2)
+  igv            Decimal  @db.Decimal(12, 2)
+  total          Decimal  @db.Decimal(12, 2)
+  status         String   @default("issued")
+  voidReason     String?  @map("void_reason")
+  issuedAt       DateTime @default(now()) @map("issued_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
 
   tenant   Tenant    @relation(fields: [tenantId], references: [id])
   order    Order     @relation(fields: [orderId], references: [id])
@@ -825,23 +848,31 @@ model Employee {
 // `points`/`backtest` se guardan como JSON (el resultado tal cual de core-ai).
 // status: running → completed | failed.
 model ForecastRun {
-  id           String    @id @default(uuid()) @db.Uuid
-  tenantId     String    @map("tenant_id") @db.Uuid
-  scope        String // 'total' | 'menuItem'
-  menuItemId   String?   @map("menu_item_id") @db.Uuid
-  horizon      Int
-  engine       String? // motor solicitado (auto/statsforecast/timesfm/…)
-  status       String    @default("running") // running | completed | failed
-  model        String? // modelo reportado por core-ai
-  baseline     String?
-  observations Int?
-  spanDays     Int?      @map("span_days")
-  dataQuality  String?   @map("data_quality")
-  points       Json? // [{ target_date, yhat, yhat_lo, yhat_hi }]
-  backtest     Json?
-  error        String?
-  createdAt    DateTime  @default(now()) @map("created_at")
-  completedAt  DateTime? @map("completed_at")
+  id            String    @id @default(uuid()) @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  scope         String // 'total' | 'menuItem'
+  menuItemId    String?   @map("menu_item_id") @db.Uuid
+  horizon       Int
+  engine        String? // motor solicitado (auto/statsforecast/timesfm/…)
+  status        String    @default("running") // running | completed | failed
+  model         String? // modelo reportado por core-ai
+  baseline      String?
+  observations  Int?
+  spanDays      Int?      @map("span_days")
+  dataQuality   String?   @map("data_quality")
+  points        Json? // [{ target_date, yhat, yhat_lo, yhat_hi }]
+  // backtest incluye model_smape_no_context (HU-08-07 fase 2) cuando el motor
+  // resuelto fue "ml": mismo holdout SIN contexto, para la comparativa
+  // académica con/sin variables exógenas. Sigue siendo JSON tal cual core-ai.
+  backtest      Json?
+  // HU-08-07 (fase 2) · Contexto exógeno (calendario peruano + clima). Ambos
+  // nullable: las corridas previas a esta migración no lo tienen (lectura
+  // hacia atrás compatible — `toView` los proyecta como null/[]).
+  drivers       Json? // [{ date, kind, label, impact_pct }] — factores dentro del horizonte
+  contextStatus String?   @map("context_status") // 'full' | 'calendar_only' | 'off'
+  error         String?
+  createdAt     DateTime  @default(now()) @map("created_at")
+  completedAt   DateTime? @map("completed_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
 
