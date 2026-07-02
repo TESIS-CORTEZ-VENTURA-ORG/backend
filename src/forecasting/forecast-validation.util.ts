@@ -21,6 +21,11 @@ export interface ValidationRow {
   yhatHi: number;
   actual: number | null;
   errorPct: number | null; // APE; null si el real es 0 (no se puede dividir)
+  // SMAPE por día — a diferencia del APE (denominador = real), el denominador es
+  // el promedio de |real| y |predicho|, así que solo es null cuando AMBOS son 0
+  // (el HU-08-08 accuracy endpoint lo usa porque no se rompe con reales en 0,
+  // algo común en insumos/platos de baja rotación).
+  smapePct: number | null;
   inInterval: boolean | null; // real ∈ [yhat_lo, yhat_hi]
   status: 'compared' | 'pending';
 }
@@ -28,6 +33,8 @@ export interface ValidationRow {
 export interface ValidationSummary {
   comparedDays: number;
   mape: number | null; // promedio de los APE (días con real > 0); null si ninguno
+  // SMAPE realizado — promedio de `smapePct` (días con real+predicho ≠ 0 ambos 0).
+  smape: number | null;
   intervalCoveragePct: number | null; // % de días comparados con el real en el intervalo
 }
 
@@ -56,6 +63,7 @@ export function compareForecastVsActual(
         yhatHi: p.yhat_hi,
         actual: null,
         errorPct: null,
+        smapePct: null,
         inInterval: null,
         status: 'pending',
       };
@@ -63,6 +71,13 @@ export function compareForecastVsActual(
     const actual = actualByDay[p.target_date];
     const errorPct =
       actual === 0 ? null : round((Math.abs(actual - p.yhat) / actual) * 100);
+    // SMAPE: denominador = promedio de |real| y |predicho| — solo indefinido si
+    // AMBOS son 0 (a diferencia del APE, que se rompe con real=0 y predicho>0).
+    const smapeDenom = (Math.abs(actual) + Math.abs(p.yhat)) / 2;
+    const smapePct =
+      smapeDenom === 0
+        ? null
+        : round((Math.abs(actual - p.yhat) / smapeDenom) * 100);
     return {
       targetDate: p.target_date,
       yhat: p.yhat,
@@ -70,6 +85,7 @@ export function compareForecastVsActual(
       yhatHi: p.yhat_hi,
       actual,
       errorPct,
+      smapePct,
       inInterval: actual >= p.yhat_lo && actual <= p.yhat_hi,
       status: 'compared',
     };
@@ -79,6 +95,9 @@ export function compareForecastVsActual(
   const apes = compared
     .map((r) => r.errorPct)
     .filter((e): e is number => e !== null);
+  const smapes = compared
+    .map((r) => r.smapePct)
+    .filter((e): e is number => e !== null);
   const inInterval = compared.filter((r) => r.inInterval === true).length;
 
   return {
@@ -87,6 +106,9 @@ export function compareForecastVsActual(
       comparedDays: compared.length,
       mape: apes.length
         ? round(apes.reduce((s, e) => s + e, 0) / apes.length)
+        : null,
+      smape: smapes.length
+        ? round(smapes.reduce((s, e) => s + e, 0) / smapes.length)
         : null,
       intervalCoveragePct: compared.length
         ? round((inInterval / compared.length) * 100)

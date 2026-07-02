@@ -3,13 +3,20 @@ import { z } from 'zod';
 /**
  * E10 · Tipos de notificación. Coincide con los eventos del dominio:
  * low_stock (HU-05-10), order_ready / bill_requested (E03 POS), system (genérico
- * / futuras alertas de IA E08). PUSH y otros tipos quedan fuera de alcance.
+ * / futuras alertas de IA E08), forecast_shortfall (E08×E10 — el forecast
+ * detecta que un insumo no cubre la demanda proyectada; ver
+ * `ForecastingService.notifyShortfalls`). PUSH y otros tipos quedan fuera de
+ * alcance. Nota de compatibilidad: la campana del frontend (`notifications-
+ * adapter.ts`) coerciona cualquier tipo desconocido a `system` (fallback
+ * genérico), así que un tipo nuevo acá NUNCA rompe la UI — solo pierde el CTA
+ * específico hasta que el frontend lo modele explícitamente.
  */
 export const notificationTypeSchema = z.enum([
   'low_stock',
   'order_ready',
   'bill_requested',
   'system',
+  'forecast_shortfall',
 ]);
 export type NotificationType = z.infer<typeof notificationTypeSchema>;
 

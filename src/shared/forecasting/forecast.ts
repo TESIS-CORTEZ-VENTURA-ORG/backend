@@ -123,12 +123,17 @@ export type BacktestMetrics = z.infer<typeof backtestMetricsSchema>;
  * HU-08-07 · Tipo de factor exógeno detectado por core-ai dentro del
  * horizonte pronosticado. `weekend` no depende del calendario peruano; el
  * resto sí. `gastro_event` es el calendario gastronómico curado (no oficial).
+ * `payday` (quincena/fin de mes) — added junto con E10×E08 (notificaciones
+ * proactivas) porque core-ai ya lo emite; sin este valor, cualquier corrida
+ * cuyo horizonte cruce una quincena rompe `coreAiForecastResponseSchema`
+ * (falla dura la corrida completa, no solo el driver desconocido).
  */
 export const driverKindSchema = z.enum([
   'holiday',
   'gastro_event',
   'weather',
   'weekend',
+  'payday',
 ]);
 export type DriverKind = z.infer<typeof driverKindSchema>;
 

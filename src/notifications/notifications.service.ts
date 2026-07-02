@@ -1,7 +1,11 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../platform/prisma/prisma.service';
-import { type NotificationType, type SetPreferenceInput } from '../shared';
+import {
+  type AppRole,
+  type NotificationType,
+  type SetPreferenceInput,
+} from '../shared';
 
 type Tx = Prisma.TransactionClient;
 type NotificationRow = Prisma.NotificationGetPayload<object>;
@@ -11,6 +15,14 @@ const DEFAULT_LIMIT = 50;
 // Default por canal cuando el usuario no tiene preferencia explícita (HU-10-03).
 const DEFAULT_IN_APP = true;
 const DEFAULT_EMAIL = false;
+
+// E10×E08 (notificaciones proactivas del forecast) · Ventana de supresión
+// anti-spam para notificaciones "de condición" (no de evento puntual como
+// low_stock, que ya es idempotente por "crossing" — ver `InventoryService.
+// notifyIfCrossedLowStock`). Un forecast puede correr varias veces al día
+// (manual + cron semanal) y recomputar el MISMO shortfall; sin esta ventana,
+// cada corrida generaría una notificación nueva para la misma condición vigente.
+const DEDUP_WINDOW_HOURS = 24;
 
 /** Entrada para crear una notificación (service-to-service, HU-10-01). */
 export interface CreateNotificationInput {
@@ -47,6 +59,23 @@ export interface PreferenceView {
 
 export interface PreferenceListView {
   items: PreferenceView[];
+}
+
+/**
+ * E10×E08 · Entrada para crear una notificación DIRIGIDA a todos los usuarios
+ * del tenant con alguno de `roles` (p. ej. `forecast_shortfall` → solo
+ * owner/manager: las compras no son decisión de `staff`). `dedupKey`
+ * identifica la CONDICIÓN que dispara la notificación (p. ej. el insumo en
+ * shortfall); mientras exista una notificación vigente con el mismo
+ * (`type`, `dedupKey`) no se crea otra — ver `isDedupSuppressed`.
+ */
+export interface CreateForRolesInput {
+  roles: AppRole[];
+  type: NotificationType;
+  title: string;
+  body: string;
+  data?: Record<string, unknown>;
+  dedupKey: string;
 }
 
 function toView(n: NotificationRow): NotificationView {
@@ -120,6 +149,74 @@ export class NotificationsService {
       },
     });
     return toView(created);
+  }
+
+  /**
+   * E10×E08 · Crea una notificación DIRIGIDA (una fila por usuario) para todos
+   * los usuarios del tenant con alguno de `input.roles` — usado por triggers
+   * "de condición" que no deben llegar a `staff` (p. ej. `forecast_shortfall`:
+   * las compras son decisión de owner/manager). Antispam vía `dedupKey` (ver
+   * `isDedupSuppressed`); si la condición ya está vigente, devuelve `[]` sin
+   * crear nada. Tx-aware, mismo criterio que `createTx` (respeta la preferencia
+   * in-app de cada destinatario).
+   */
+  async createForRolesTx(
+    tx: Tx,
+    tenantId: string,
+    input: CreateForRolesInput,
+  ): Promise<NotificationView[]> {
+    if (await this.isDedupSuppressed(tx, input.type, input.dedupKey)) {
+      return [];
+    }
+
+    // RLS acota el tenant (misma tx del caller) — nunca se filtra tenantId acá.
+    const recipients = await tx.user.findMany({
+      where: { deletedAt: null, roles: { hasSome: input.roles } },
+      select: { id: true },
+    });
+
+    const data = {
+      ...(input.data ?? {}),
+      dedupKey: input.dedupKey,
+    } as Prisma.InputJsonValue;
+
+    const created: NotificationView[] = [];
+    for (const recipient of recipients) {
+      const view = await this.createTx(tx, tenantId, {
+        userId: recipient.id,
+        type: input.type,
+        title: input.title,
+        body: input.body,
+        data,
+      });
+      if (view) created.push(view);
+    }
+    return created;
+  }
+
+  /**
+   * E10×E08 · ¿Ya existe una notificación "vigente" con el mismo
+   * (`type`, `dedupKey`)? Vigente = no leída (el destinatario todavía no la vio)
+   * O creada dentro de `DEDUP_WINDOW_HOURS` (aunque ya se haya leído, no se
+   * re-crea de inmediato — evita "confirmar y volver a notificar" en el mismo
+   * ciclo). El filtro JSON (`path`/`equals`) requiere Postgres (ver
+   * `backend.md` §2 — el provider de Prisma acá es siempre `postgresql`).
+   */
+  private async isDedupSuppressed(
+    tx: Tx,
+    type: NotificationType,
+    dedupKey: string,
+  ): Promise<boolean> {
+    const windowStart = new Date(Date.now() - DEDUP_WINDOW_HOURS * 3_600_000);
+    const existing = await tx.notification.findFirst({
+      where: {
+        type,
+        data: { path: ['dedupKey'], equals: dedupKey },
+        OR: [{ readAt: null }, { createdAt: { gte: windowStart } }],
+      },
+      select: { id: true },
+    });
+    return existing !== null;
   }
 
   /**

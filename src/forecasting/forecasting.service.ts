@@ -3,16 +3,20 @@ import {
   BadRequestException,
   HttpException,
   Injectable,
+  Logger,
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { Queue } from 'bullmq';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../platform/prisma/prisma.service';
 import { FORECAST_QUEUE } from '../platform/queue/redis-connection';
 import {
+  type AppRole,
   type BacktestMetrics,
   type CoreAiForecastResponse,
+  type ForecastAccuracyResponse,
   type ForecastContextStatus,
   type ForecastDriver,
   type ForecastInsightsResponse,
@@ -24,8 +28,13 @@ import {
 import { type CoreAiLocation, CoreAiClient } from './core-ai.client';
 import {
   compareForecastVsActual,
+  type ForecastPointLike,
   type ForecastValidation,
 } from './forecast-validation.util';
+import {
+  mostRelevantDriver,
+  planShortfallNotifications,
+} from './forecast-shortfall.util';
 import {
   zeroFillDailySeries,
   type AggregatedSeries,
@@ -46,6 +55,21 @@ const TRANSIENT_STATUSES = new Set([502, 503, 504]);
 // decisión de negocio, no una preferencia del request.
 const USE_CONTEXT = true;
 const DEFAULT_ENGINE = 'auto';
+
+// E10×E08 (notificaciones proactivas) · Hasta esta cantidad de insumos en
+// shortfall se notifica UNO POR UNO (mismo estilo que `low_stock`); más allá se
+// agrupa en una sola notificación para no floodear la campana (ver
+// `forecast-shortfall.util.planShortfallNotifications`).
+const SHORTFALL_INDIVIDUAL_LIMIT = 3;
+
+// Solo owner/manager gestionan compras — staff no recibe `forecast_shortfall`
+// (igual matriz de permisos que `manage Report`, ver `CaslAbilityFactory`).
+const SHORTFALL_RECIPIENT_ROLES: AppRole[] = ['owner', 'manager'];
+
+// HU-08-08 · Umbral mínimo de días ya transcurridos para que las métricas de
+// `accuracy` sean representativas (una muestra de 1-2 días puede dar un SMAPE
+// engañoso). Por debajo, la respuesta sigue siendo 200 con `needsMoreData: true`.
+const MIN_ACCURACY_POINTS = 3;
 
 /** Respuesta del seam de demanda: la serie + metadatos de calidad. Lo que `points`
  *  contiene es exactamente el `history` que consume `core-ai` (`frequency:"D"`). */
@@ -115,9 +139,12 @@ export interface ForecastRunView {
 
 @Injectable()
 export class ForecastingService {
+  private readonly logger = new Logger(ForecastingService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly coreAi: CoreAiClient,
+    private readonly notifications: NotificationsService,
     @InjectQueue(FORECAST_QUEUE) private readonly queue: Queue<ForecastJobData>,
   ) {}
 
@@ -194,6 +221,14 @@ export class ForecastingService {
           },
         }),
       );
+
+      // E10×E08 (notificaciones proactivas) · Solo las corridas `scope=total`
+      // alimentan `shoppingSuggestions` (BOM del menú completo); una corrida
+      // `menuItem` no cambia esa sugerencia, así que no dispara el chequeo.
+      // No debe tumbar la corrida ya completada si falla — ver `notifyShortfalls`.
+      if (input.scope === 'total') {
+        await this.notifyShortfalls(tenantId, input.horizon);
+      }
     } catch (err) {
       await this.prisma.runInTenant(tenantId, (tx) =>
         tx.forecastRun.update({
@@ -526,6 +561,92 @@ export class ForecastingService {
   }
 
   /**
+   * E10×E08 (notificaciones proactivas) · Tras completar una corrida
+   * `scope=total`, reusa `shoppingSuggestions` (MISMA lógica de BOM/shortfall
+   * que el endpoint manual — no se duplica) para detectar insumos que no
+   * cubren la demanda proyectada y avisar a owner/manager por la campana.
+   *
+   * Diseño:
+   *  - `planShortfallNotifications` decide 1-por-insumo (≤3, mismo estilo que
+   *    `low_stock`) vs. UNA agrupada (>3, evita floodear la campana).
+   *  - `mostRelevantDriver` narra el POR QUÉ ("se viene Fiestas Patrias") con
+   *    el factor exógeno de mayor impacto dentro de la ventana del horizonte.
+   *  - Antispam vía `NotificationsService.createForRolesTx` (`dedupKey` por
+   *    insumo o `:grouped`): una corrida repetida con el MISMO shortfall no
+   *    genera una notificación nueva mientras la anterior siga vigente.
+   *  - Resiliente: un fallo acá NUNCA debe tumbar la corrida ya persistida
+   *    como `completed` — se loguea y sigue (mismo criterio que
+   *    `ForecastScheduler.runWeeklyForecasts`, que no corta por tenant).
+   */
+  private async notifyShortfalls(
+    tenantId: string,
+    horizon: number,
+  ): Promise<void> {
+    try {
+      const result = await this.shoppingSuggestions(tenantId, horizon);
+      if (result.needsForecast || result.suggestions.length === 0) return;
+
+      const plan = planShortfallNotifications(
+        result.suggestions,
+        SHORTFALL_INDIVIDUAL_LIMIT,
+      );
+      if (plan.mode === 'none') return;
+
+      const driver = mostRelevantDriver(result.drivers);
+      const driverSuffix = driver ? ` (se viene ${driver.label})` : '';
+
+      if (plan.mode === 'individual') {
+        for (const item of plan.items) {
+          await this.prisma.runInTenant(tenantId, (tx) =>
+            this.notifications.createForRolesTx(tx, tenantId, {
+              roles: SHORTFALL_RECIPIENT_ROLES,
+              type: 'forecast_shortfall',
+              title: `${item.name} no cubre los próximos ${horizon} días`,
+              body:
+                `El stock de ${item.name} no alcanza para cubrir la demanda ` +
+                `proyectada de los próximos ${horizon} días${driverSuffix} — ` +
+                `considerá pedir ${item.suggestedQty} ${item.unit}.`,
+              data: {
+                ingredientId: item.ingredientId,
+                horizon,
+                runId: result.runId,
+                href: '/forecasting/shopping-suggestions',
+              },
+              dedupKey: `forecast_shortfall:${item.ingredientId}`,
+            }),
+          );
+        }
+        return;
+      }
+
+      // plan.mode === 'grouped'
+      const names = plan.items.map((i) => i.name).join(', ');
+      await this.prisma.runInTenant(tenantId, (tx) =>
+        this.notifications.createForRolesTx(tx, tenantId, {
+          roles: SHORTFALL_RECIPIENT_ROLES,
+          type: 'forecast_shortfall',
+          title: `${plan.totalCount} insumos no cubren los próximos ${horizon} días`,
+          body:
+            `${names} y ${plan.extraCount} más no alcanzan para cubrir la ` +
+            `demanda proyectada${driverSuffix} — revisá las sugerencias de compra.`,
+          data: {
+            ingredientIds: result.suggestions.map((s) => s.ingredientId),
+            horizon,
+            runId: result.runId,
+            href: '/forecasting/shopping-suggestions',
+          },
+          dedupKey: 'forecast_shortfall:grouped',
+        }),
+      );
+    } catch (err) {
+      this.logger.error(
+        `No se pudo generar la notificación proactiva de shortfall ` +
+          `(tenant ${tenantId}): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
    * Returns today's date in the Lima timezone (America/Lima, UTC-5, no DST)
    * as 'YYYY-MM-DD'. Used to filter forecast points that are still in the future.
    */
@@ -801,6 +922,140 @@ export class ForecastingService {
       upcomingDrivers,
       backtest: backtest ? this.toInsightsBacktest(backtest) : null,
       needsForecast: false,
+    };
+  }
+
+  /**
+   * HU-08-08 · "El sistema se autoevalúa": combina TODAS las corridas
+   * `completed` del ámbito (no solo la última, a diferencia de
+   * `validateLatest`) y compara predicho vs. real día a día para las fechas
+   * YA transcurridas. Reusa el MISMO seam de agregación que el resto de E08
+   * (`dailyTotals`/`maxActualDay`, sobre `sales_history`) y el mismo comparador
+   * puro que `validateLatest` (`compareForecastVsActual`) — cero lógica
+   * duplicada. `tenant_id` SIEMPRE del JWT; `runInTenant` (RLS FORCE).
+   *
+   * Merge multi-corrida: si dos corridas predijeron el mismo día (re-forecasts
+   * a lo largo del tiempo), gana la predicción de la corrida MÁS RECIENTE para
+   * ESE día (se itera asc y se sobreescribe) — es la que mejor refleja lo que
+   * el sistema mostraba en ese momento. `runsEvaluated` cuenta las corridas que
+   * aportaron al menos un día ya transcurrido.
+   *
+   * Nunca 404/500 por falta de datos: 0 corridas, 0 corridas con días
+   * transcurridos, o pocos puntos (< `MIN_ACCURACY_POINTS`) → 200 con
+   * `needsMoreData: true` y la serie parcial que haya.
+   */
+  async getAccuracy(
+    tenantId: string,
+    scope: 'total' | 'menuItem',
+    menuItemId: string | undefined,
+  ): Promise<ForecastAccuracyResponse> {
+    const menuId = scope === 'menuItem' ? (menuItemId as string) : null;
+
+    return this.prisma.runInTenant(tenantId, async (tx) => {
+      const runs = await tx.forecastRun.findMany({
+        where: { scope, menuItemId: menuId, status: 'completed' },
+        orderBy: { completedAt: 'asc' },
+      });
+
+      if (runs.length === 0) {
+        return this.emptyAccuracy(
+          0,
+          'Aún no hay corridas de pronóstico completadas para este ámbito.',
+        );
+      }
+
+      const maxDay = await this.maxActualDay(tx, menuId);
+      if (!maxDay) {
+        return this.emptyAccuracy(
+          0,
+          'Todavía no hay historial de ventas para comparar contra lo predicho.',
+        );
+      }
+
+      // Merge: por cada corrida (asc por completedAt), los puntos con fecha ya
+      // transcurrida (<= maxDay) sobreescriben el mapa — la corrida más
+      // reciente que predijo ese día "gana".
+      const seriesMap = new Map<string, ForecastPointLike>();
+      const contributingRunIds = new Set<string>();
+      for (const run of runs) {
+        const points = (run.points as unknown as ForecastPoint[] | null) ?? [];
+        for (const p of points) {
+          if (p.target_date <= maxDay) {
+            seriesMap.set(p.target_date, p);
+            contributingRunIds.add(run.id);
+          }
+        }
+      }
+
+      if (seriesMap.size === 0) {
+        return this.emptyAccuracy(
+          contributingRunIds.size,
+          'Las corridas completadas todavía no tienen fechas transcurridas para comparar.',
+        );
+      }
+
+      const dates = [...seriesMap.keys()].sort();
+      const from = new Date(`${dates[0]}T00:00:00-05:00`);
+      const to = new Date(`${dates[dates.length - 1]}T23:59:59-05:00`);
+      const daily = await this.dailyTotals(tx, menuId, from, to);
+      const totalsByDay = new Map(daily.map((d) => [d.ds, d.y]));
+
+      const actualByDay: Record<string, number> = {};
+      for (const date of dates) {
+        actualByDay[date] = totalsByDay.get(date) ?? 0;
+      }
+
+      const mergedPoints = dates.map(
+        (d) => seriesMap.get(d) as ForecastPointLike,
+      );
+      const validation = compareForecastVsActual(mergedPoints, actualByDay);
+
+      const series: ForecastAccuracyResponse['series'] = validation.rows.map(
+        (r) => ({
+          date: r.targetDate,
+          predicted: r.yhat,
+          actual: r.actual as number, // siempre presente: todo target_date <= maxDay
+          yhatLo: r.yhatLo,
+          yhatHi: r.yhatHi,
+        }),
+      );
+
+      const points = validation.summary.comparedDays;
+      const needsMoreData = points < MIN_ACCURACY_POINTS;
+
+      return {
+        series,
+        metrics: {
+          smapeRealized: validation.summary.smape,
+          mapeRealized: validation.summary.mape,
+          coveragePct: validation.summary.intervalCoveragePct,
+          points,
+        },
+        runsEvaluated: contributingRunIds.size,
+        needsMoreData,
+        message: needsMoreData
+          ? 'Pocos días transcurridos todavía — las métricas se irán afinando con más historia.'
+          : undefined,
+      };
+    });
+  }
+
+  // Respuesta válida (nunca 404/500) para los casos sin datos suficientes.
+  private emptyAccuracy(
+    runsEvaluated: number,
+    message: string,
+  ): ForecastAccuracyResponse {
+    return {
+      series: [],
+      metrics: {
+        smapeRealized: null,
+        mapeRealized: null,
+        coveragePct: null,
+        points: 0,
+      },
+      runsEvaluated,
+      needsMoreData: true,
+      message,
     };
   }
 

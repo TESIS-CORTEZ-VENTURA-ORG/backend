@@ -22,6 +22,7 @@ import {
   shoppingSuggestionsQuerySchema,
   type ApiResponse,
   type DemandSeriesQueryInput,
+  type ForecastAccuracyResponse,
   type ForecastInsightsResponse,
   type JwtClaims,
   type PredictionsQueryInput,
@@ -162,5 +163,30 @@ export class ForecastingController {
     @CurrentUser() claims: JwtClaims,
   ): Promise<ApiResponse<ForecastInsightsResponse>> {
     return ok(await this.forecasting.getInsights(claims.tenant_id));
+  }
+
+  /**
+   * HU-08-08 · "El sistema se autoevalúa": combina TODAS las corridas
+   * `completed` del ámbito (no solo la última — a diferencia de `/validation`)
+   * y compara predicho vs. real día a día para las fechas ya transcurridas.
+   * Nunca 404/500 por falta de datos: `needsMoreData: true` (200) cuando hay
+   * pocos días transcurridos (incluye 0 corridas). Reusa el mismo query shape
+   * que `/predictions`/`/validation` (`scope`+`menuItemId`). CASL `read Report`
+   * (gestión), staff → 403.
+   */
+  @Get('accuracy')
+  @RequireAbility('read', 'Report')
+  async accuracy(
+    @CurrentUser() claims: JwtClaims,
+    @Query(new ZodValidationPipe(predictionsQuerySchema))
+    query: PredictionsQueryInput,
+  ): Promise<ApiResponse<ForecastAccuracyResponse>> {
+    return ok(
+      await this.forecasting.getAccuracy(
+        claims.tenant_id,
+        query.scope,
+        query.menuItemId,
+      ),
+    );
   }
 }

@@ -27,6 +27,7 @@ export * from './ingestion/sales-history';
 export * from './ingestion/import-document';
 export * from './forecasting/forecast';
 export * from './forecasting/shopping-suggestions';
+export * from './forecasting/forecast-accuracy';
 export * from './chat/chat';
 export * from './employees/employee';
 export * from './inventory/coverage';
